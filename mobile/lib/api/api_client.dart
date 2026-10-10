@@ -128,6 +128,12 @@ class ApiClient {
     return Product.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
+  /// Excel raporunu indirir (ör. '/api/reports/stock.xlsx').
+  Future<List<int>> downloadReport(String path, {Map<String, String>? query}) async {
+    final res = await _send(() => http.get(_uri(path, query), headers: _headers));
+    return res.bodyBytes;
+  }
+
   /// Her kayıt için yeni bir clientRequestId üretilir. Ağ hatasında aynı istek
   /// tekrar gönderilirse sunucu hareketi ikinci kez yazmaz.
   Future<MovementResult> createMovement({

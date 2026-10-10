@@ -7,9 +7,9 @@ namespace StokTakip.Api.Data;
 public static class DbInitializer
 {
     /// <summary>
-    /// Veritabanını oluşturur ve demo verisini yükler.
+    /// Bekleyen migration'ları uygular ve boş veritabanına demo verisini yükler.
     /// SQL Server container'ı API'den geç ayağa kalkabildiği için birkaç kez dener.
-    /// TODO: EnsureCreated yerine EF Core migrations'a geç (README > Sonraki adımlar).
+    /// Projede henüz migration yoksa (ilk kurulum) şemayı EnsureCreated ile oluşturur.
     /// </summary>
     public static async Task InitializeAsync(IServiceProvider services, ILogger logger)
     {
@@ -20,7 +20,10 @@ public static class DbInitializer
         {
             try
             {
-                await db.Database.EnsureCreatedAsync();
+                if (db.Database.GetMigrations().Any())
+                    await db.Database.MigrateAsync();
+                else
+                    await db.Database.EnsureCreatedAsync();
                 break;
             }
             catch (Exception ex) when (attempt < 10)

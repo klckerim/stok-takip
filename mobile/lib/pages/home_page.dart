@@ -1,4 +1,9 @@
+import 'dart:io';
+
+import 'package:cross_file/cross_file.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../api/api_client.dart';
 import '../main.dart';
@@ -102,6 +107,69 @@ class _HomePageState extends State<HomePage> {
     await _openProduct(product);
   }
 
+  /// Excel raporu seçimi.
+  Future<void> _showReports() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.inventory_2_outlined),
+              title: const Text('Stok raporu'),
+              subtitle: const Text('Tüm ürünler, anlık stok, kritik olanlar işaretli'),
+              onTap: () => Navigator.of(ctx).pop('stock'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.swap_vert),
+              title: const Text('Hareket raporu'),
+              subtitle: const Text('Son 30 günün giriş, çıkış ve sayımları'),
+              onTap: () => Navigator.of(ctx).pop('movements'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    if (choice == 'stock') {
+      await _exportReport('/api/reports/stock.xlsx', 'stok-raporu-$today.xlsx');
+    } else {
+      await _exportReport('/api/reports/movements.xlsx', 'hareketler-$today.xlsx', query: {'days': '30'});
+    }
+  }
+
+  /// Raporu indirir, geçici dosyaya yazar ve paylaşım menüsünü açar (WhatsApp, Mail, Dosyalar'a kaydet...).
+  Future<void> _exportReport(String path, String fileName, {Map<String, String>? query}) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final box = context.findRenderObject() as RenderBox?;
+    messenger.showSnackBar(const SnackBar(content: Text('Rapor hazırlanıyor...'), duration: Duration(seconds: 1)));
+
+    try {
+      final bytes = await _api.downloadReport(path, query: query);
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/$fileName');
+      await file.writeAsBytes(bytes, flush: true);
+
+      await SharePlus.instance.share(ShareParams(
+        files: [
+          XFile(file.path, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+        ],
+        // iPad'de paylaşım penceresinin konumu için gerekli.
+        sharePositionOrigin: box == null ? null : box.localToGlobal(Offset.zero) & box.size,
+      ));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.isUnauthorized) return handleUnauthorized(context);
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } on FileSystemException {
+      messenger.showSnackBar(const SnackBar(content: Text('Rapor dosyası kaydedilemedi.')));
+    }
+  }
+
   Future<void> _openProduct(Product product) async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ProductPage(product: product)));
     if (mounted) _load(); // stok değişmiş olabilir
@@ -116,6 +184,11 @@ class _HomePageState extends State<HomePage> {
         actions: [
           if (session != null)
             Center(child: Text(session.fullName, style: Theme.of(context).textTheme.bodySmall)),
+          IconButton(
+            tooltip: 'Excel raporu',
+            icon: const Icon(Icons.file_download_outlined),
+            onPressed: _showReports,
+          ),
           IconButton(
             tooltip: 'Çıkış',
             icon: const Icon(Icons.logout),

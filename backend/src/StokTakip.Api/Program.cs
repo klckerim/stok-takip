@@ -42,7 +42,7 @@ builder.Services.AddAuthorization();
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddProblemDetails();
-builder.Services.AddOpenApi();
+builder.Services.AddOpenApi(o => o.AddDocumentTransformer<BearerSecuritySchemeTransformer>());
 
 var app = builder.Build();
 
@@ -59,6 +59,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" })).WithTags("Health"
 app.MapAuthEndpoints();
 app.MapProductEndpoints();
 app.MapMovementEndpoints();
+app.MapReportEndpoints();
 
 await DbInitializer.InitializeAsync(app.Services, app.Logger);
 

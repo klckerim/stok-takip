@@ -161,6 +161,20 @@ public class ApiTests(ApiFixture fixture) : IClassFixture<ApiFixture>
     }
 
     [Fact]
+    public async Task Stock_report_is_an_excel_file()
+    {
+        var client = await LoggedInClient();
+        var res = await client.GetAsync("/api/reports/stock.xlsx");
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            res.Content.Headers.ContentType?.MediaType);
+        var bytes = await res.Content.ReadAsByteArrayAsync();
+        Assert.True(bytes.Length > 1000);
+        Assert.Equal((byte)'P', bytes[0]); // xlsx = zip, "PK" ile başlar
+    }
+
+    [Fact]
     public async Task Only_admin_can_create_product()
     {
         var depo = await LoggedInClient();

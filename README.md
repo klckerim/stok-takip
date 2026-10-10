@@ -10,6 +10,7 @@ Depo personeli telefonla ürün barkodunu okutur; giriş, çıkış veya sayım 
 - Kritik stok seviyesi: altına düşen ürün listede kırmızı görünür, "Sadece kritik stok" filtresi
 - Bilinmeyen barkod okutulursa yönetici ürünü telefondan ekler (açılış stoğu ve kritik seviyeyle)
 - Rol bazlı yetki: depo personeli hareket girer, yönetici ürün ekler ve kritik seviyeyi değiştirir
+- Excel raporları (stok ve son 30 gün hareketleri): telefondan indirip WhatsApp, e-posta veya Dosyalar ile paylaşma
 
 - **Mobil:** Flutter (Android / iOS), kamerayla barkod okuma (`mobile_scanner`)
 - **Backend:** ASP.NET Core 10 Minimal API, JWT ile giriş, rol bazlı yetki
@@ -112,11 +113,25 @@ Emülatörde kamera yoksa barkod ekranındaki **Elle gir** ile demo barkodlardan
 | POST | `/api/products` | Admin | Ürün ekle (açılış stoğu ve kritik seviye isteğe bağlı) |
 | PUT | `/api/products/{id}` | Admin | Ad, birim, kritik seviye güncelle |
 | POST | `/api/movements` | Giriş | Giriş / çıkış / sayım (`In`, `Out`, `Count`) |
+| GET | `/api/reports/stock.xlsx` | Giriş | Stok raporu (Excel) |
+| GET | `/api/reports/movements.xlsx?days=30` | Giriş | Hareket raporu (Excel) |
+
+Scalar'da (`/scalar`) önce login ol, dönen token'ı **Authentication → Bearer** alanına bir kez yapıştır; tüm isteklerde kullanılır.
+
+## Veritabanı şeması değişince (EF Core migrations)
+
+Uygulama açılışta bekleyen migration'ları kendisi uygular; veri silinmez.
+
+```bash
+dotnet tool install --global dotnet-ef        # bir kez
+cd backend/src/StokTakip.Api
+dotnet ef migrations add AlanAdi --output-dir Data/Migrations
+cd ../.. && docker compose up -d --build
+```
 
 ## Sonraki adımlar
 
-- [ ] `EnsureCreated` yerine EF Core migrations (`dotnet ef migrations add Initial`, açılışta `Migrate()`)
-- [ ] Yönetim paneli (Razor Pages): ürün ekleme, stok raporu, Excel'e aktarma
+- [ ] Yönetim paneli (Razor Pages): ürün ve kullanıcı yönetimi
 - [ ] Offline sayım: internet yokken cihazda kuyruğa al, bağlantı gelince gönder
 - [ ] Canlıya alma: VPS + Docker Compose + domain + HTTPS (Caddy veya Nginx), APK indirme linki
 - [ ] README'ye ekran görüntüleri ve 2 dakikalık demo videosu
