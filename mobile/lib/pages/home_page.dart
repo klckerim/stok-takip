@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../main.dart';
 import '../models.dart';
+import 'add_product_page.dart';
 import 'product_page.dart';
 import 'scan_page.dart';
 
@@ -18,6 +19,7 @@ class _HomePageState extends State<HomePage> {
   final _search = TextEditingController();
   List<Product> _products = [];
   bool _loading = true;
+  bool _criticalOnly = false;
   String? _error;
 
   @override
@@ -38,7 +40,7 @@ class _HomePageState extends State<HomePage> {
       _error = null;
     });
     try {
-      final items = await _api.getProducts(search: _search.text.trim());
+      final items = await _api.getProducts(search: _search.text.trim(), criticalOnly: _criticalOnly);
       if (!mounted) return;
       setState(() => _products = items);
     } on ApiException catch (e) {
@@ -65,8 +67,39 @@ class _HomePageState extends State<HomePage> {
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.isUnauthorized) return handleUnauthorized(context);
+      if (e.isNotFound) return _onUnknownBarcode(barcode);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
     }
+  }
+
+  /// Barkod sistemde yok: yönetici ise ürün eklemeyi önerir.
+  Future<void> _onUnknownBarcode(String barcode) async {
+    final isAdmin = _api.session?.isAdmin ?? false;
+    if (!isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('$barcode kayıtlı değil. Ürün eklemek için yöneticiye bildir.'),
+      ));
+      return;
+    }
+
+    final add = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Ürün bulunamadı'),
+        content: Text('$barcode barkodlu ürün kayıtlı değil. Şimdi eklemek ister misin?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Vazgeç')),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Ürün ekle')),
+        ],
+      ),
+    );
+    if (add != true || !mounted) return;
+
+    final product = await Navigator.of(context).push<Product>(
+      MaterialPageRoute(builder: (_) => AddProductPage(barcode: barcode)),
+    );
+    if (product == null || !mounted) return;
+    await _openProduct(product);
   }
 
   Future<void> _openProduct(Product product) async {
@@ -113,6 +146,21 @@ class _HomePageState extends State<HomePage> {
               onSubmitted: (_) => _load(),
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: FilterChip(
+                avatar: const Icon(Icons.warning_amber_rounded, size: 18),
+                label: const Text('Sadece kritik stok'),
+                selected: _criticalOnly,
+                onSelected: (v) {
+                  setState(() => _criticalOnly = v);
+                  _load();
+                },
+              ),
+            ),
+          ),
           Expanded(child: _buildList()),
         ],
       ),
@@ -144,7 +192,7 @@ class _HomePageState extends State<HomePage> {
       );
     }
     if (_products.isEmpty) {
-      return const Center(child: Text('Ürün bulunamadı.'));
+      return Center(child: Text(_criticalOnly ? 'Kritik seviyede ürün yok.' : 'Ürün bulunamadı.'));
     }
     return RefreshIndicator(
       onRefresh: _load,
@@ -154,12 +202,16 @@ class _HomePageState extends State<HomePage> {
         separatorBuilder: (_, __) => const Divider(height: 1),
         itemBuilder: (context, i) {
           final p = _products[i];
+          final error = Theme.of(context).colorScheme.error;
           return ListTile(
+            leading: p.isCritical ? Icon(Icons.warning_amber_rounded, color: error) : null,
             title: Text(p.name),
-            subtitle: Text(p.barcode),
+            subtitle: Text(p.isCritical
+                ? '${p.barcode} · kritik seviye ${formatQty(p.minStock)}'
+                : p.barcode),
             trailing: Text(
               '${formatQty(p.stock)} ${p.unit}',
-              style: Theme.of(context).textTheme.titleMedium,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(color: p.isCritical ? error : null),
             ),
             onTap: () => _openProduct(p),
           );

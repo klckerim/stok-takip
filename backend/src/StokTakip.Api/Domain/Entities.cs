@@ -21,6 +21,10 @@ public class Product
     public required string Barcode { get; set; }
     public required string Name { get; set; }
     public required string Unit { get; set; }
+
+    /// <summary>Kritik stok seviyesi. 0 = takip edilmiyor. Stok bu değere eşit ya da altındaysa ürün kritiktir.</summary>
+    public decimal MinStock { get; set; }
+
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
     public List<StockMovement> Movements { get; set; } = [];

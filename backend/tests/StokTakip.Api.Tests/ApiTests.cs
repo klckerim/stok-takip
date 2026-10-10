@@ -131,6 +131,36 @@ public class ApiTests(ApiFixture fixture) : IClassFixture<ApiFixture>
     }
 
     [Fact]
+    public async Task Critical_filter_returns_products_at_or_below_min_stock()
+    {
+        var client = await LoggedInClient();
+        var items = await client.GetFromJsonAsync<List<ProductDto>>("/api/products?criticalOnly=true", Json);
+
+        Assert.NotNull(items);
+        Assert.Contains(items!, p => p.Barcode == PaletBarcode); // demo: stok 60, kritik seviye 80
+        Assert.All(items!, p => Assert.True(p.IsCritical));
+    }
+
+    [Fact]
+    public async Task Created_product_gets_opening_stock_and_movement()
+    {
+        var admin = await LoggedInClient("admin", "Admin123!");
+        var barcode = $"TEST-{Guid.NewGuid():N}";
+
+        var res = await admin.PostAsJsonAsync("/api/products",
+            new CreateProductRequest(barcode, "Kitap", "Adet", MinStock: 2, InitialStock: 5), Json);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+
+        var product = await GetByBarcode(admin, barcode);
+        Assert.Equal(5, product.Stock);
+        Assert.False(product.IsCritical);
+
+        var movements = await admin.GetFromJsonAsync<List<MovementDto>>($"/api/products/{product.Id}/movements", Json);
+        Assert.Single(movements!);
+        Assert.Equal("admin", movements![0].UserName);
+    }
+
+    [Fact]
     public async Task Only_admin_can_create_product()
     {
         var depo = await LoggedInClient();

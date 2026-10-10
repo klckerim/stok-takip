@@ -24,6 +24,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.Barcode).HasMaxLength(64);
             e.Property(x => x.Name).HasMaxLength(200);
             e.Property(x => x.Unit).HasMaxLength(20);
+            e.Property(x => x.MinStock).HasPrecision(18, 3);
+            e.Property(x => x.CreatedAtUtc).HasConversion(v => v, v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
             e.HasIndex(x => x.Barcode).IsUnique();
         });
 
@@ -33,6 +35,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.CountedQuantity).HasPrecision(18, 3);
             e.Property(x => x.Type).HasConversion<byte>();
             e.Property(x => x.Note).HasMaxLength(500);
+            // SQL Server'dan okunan tarih "Unspecified" gelir; UTC olduğunu belirt ki JSON'da "Z" ile gitsin.
+            e.Property(x => x.CreatedAtUtc).HasConversion(v => v, v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
             e.HasIndex(x => new { x.ProductId, x.CreatedAtUtc });
             e.HasIndex(x => x.ClientRequestId)
                 .IsUnique()

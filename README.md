@@ -2,6 +2,15 @@
 
 Depo personeli telefonla ürün barkodunu okutur; giriş, çıkış veya sayım kaydeder. Stok anında güncellenir.
 
+**Özellikler**
+
+- Kamerayla barkod okuma (okununca titreşim), elle barkod girişi
+- Giriş / çıkış / sayım; eksi stoğa düşmeyi engeller
+- Ürün ekranında son hareketler: kim, ne zaman, ne yaptı
+- Kritik stok seviyesi: altına düşen ürün listede kırmızı görünür, "Sadece kritik stok" filtresi
+- Bilinmeyen barkod okutulursa yönetici ürünü telefondan ekler (açılış stoğu ve kritik seviyeyle)
+- Rol bazlı yetki: depo personeli hareket girer, yönetici ürün ekler ve kritik seviyeyi değiştirir
+
 - **Mobil:** Flutter (Android / iOS), kamerayla barkod okuma (`mobile_scanner`)
 - **Backend:** ASP.NET Core 10 Minimal API, JWT ile giriş, rol bazlı yetki
 - **Veritabanı:** SQL Server, EF Core
@@ -97,17 +106,17 @@ Emülatörde kamera yoksa barkod ekranındaki **Elle gir** ile demo barkodlardan
 | Metot | Yol | Yetki | Açıklama |
 | --- | --- | --- | --- |
 | POST | `/api/auth/login` | Herkes | Token al |
-| GET | `/api/products?search=` | Giriş | Ürünler ve anlık stok |
+| GET | `/api/products?search=&criticalOnly=` | Giriş | Ürünler, anlık stok, kritik durumu |
 | GET | `/api/products/barcode/{barcode}` | Giriş | Barkodla ürün + stok |
 | GET | `/api/products/{id}/movements` | Giriş | Son hareketler |
-| POST | `/api/products` | Admin | Ürün ekle |
+| POST | `/api/products` | Admin | Ürün ekle (açılış stoğu ve kritik seviye isteğe bağlı) |
+| PUT | `/api/products/{id}` | Admin | Ad, birim, kritik seviye güncelle |
 | POST | `/api/movements` | Giriş | Giriş / çıkış / sayım (`In`, `Out`, `Count`) |
 
 ## Sonraki adımlar
 
 - [ ] `EnsureCreated` yerine EF Core migrations (`dotnet ef migrations add Initial`, açılışta `Migrate()`)
 - [ ] Yönetim paneli (Razor Pages): ürün ekleme, stok raporu, Excel'e aktarma
-- [ ] Mobilde ürün detayında son hareketler listesi
 - [ ] Offline sayım: internet yokken cihazda kuyruğa al, bağlantı gelince gönder
 - [ ] Canlıya alma: VPS + Docker Compose + domain + HTTPS (Caddy veya Nginx), APK indirme linki
 - [ ] README'ye ekran görüntüleri ve 2 dakikalık demo videosu

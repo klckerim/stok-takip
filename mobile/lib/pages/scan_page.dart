@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 /// Kamerayla barkod okur ve okunan değeri geri döndürür.
@@ -25,6 +26,7 @@ class _ScanPageState extends State<ScanPage> {
     final value = capture.barcodes.first.rawValue;
     if (value == null || value.isEmpty) return;
     _handled = true;
+    HapticFeedback.mediumImpact(); // okundu geri bildirimi
     Navigator.of(context).pop(value);
   }
 

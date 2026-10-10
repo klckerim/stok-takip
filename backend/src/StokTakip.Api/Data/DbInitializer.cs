@@ -40,18 +40,19 @@ public static class DbInitializer
         db.Users.AddRange(admin, depo);
 
         // Demo ürünler (barkodlar uydurma, test için).
-        var products = new (string Barcode, string Name, string Unit, decimal Stock)[]
+        // Palet bilerek kritik seviyenin altında başlıyor (demo için).
+        var products = new (string Barcode, string Name, string Unit, decimal Stock, decimal MinStock)[]
         {
-            ("8690000000011", "Polyester İplik 150 Denye", "Kg", 250),
-            ("8690000000028", "Karton Koli 60x40x40", "Adet", 1200),
-            ("8690000000035", "Streç Film 50 cm", "Rulo", 80),
-            ("8690000000042", "Makarna Ambalaj Filmi", "Kg", 430),
-            ("8690000000059", "Palet (Euro)", "Adet", 60),
+            ("8690000000011", "Polyester İplik 150 Denye", "Kg", 250, 100),
+            ("8690000000028", "Karton Koli 60x40x40", "Adet", 1200, 300),
+            ("8690000000035", "Streç Film 50 cm", "Rulo", 80, 20),
+            ("8690000000042", "Makarna Ambalaj Filmi", "Kg", 430, 150),
+            ("8690000000059", "Palet (Euro)", "Adet", 60, 80),
         };
 
         foreach (var p in products)
         {
-            var product = new Product { Barcode = p.Barcode, Name = p.Name, Unit = p.Unit };
+            var product = new Product { Barcode = p.Barcode, Name = p.Name, Unit = p.Unit, MinStock = p.MinStock };
             product.Movements.Add(new StockMovement
             {
                 Type = MovementType.In,

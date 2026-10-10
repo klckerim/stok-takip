@@ -77,11 +77,49 @@ class ApiClient {
     await prefs.clear();
   }
 
-  Future<List<Product>> getProducts({String? search}) async {
-    final query = (search == null || search.isEmpty) ? null : {'search': search};
-    final res = await _send(() => http.get(_uri('/api/products', query), headers: _headers));
+  Future<List<Product>> getProducts({String? search, bool criticalOnly = false}) async {
+    final query = <String, String>{
+      if (search != null && search.isNotEmpty) 'search': search,
+      if (criticalOnly) 'criticalOnly': 'true',
+    };
+    final res = await _send(() => http.get(_uri('/api/products', query.isEmpty ? null : query), headers: _headers));
     final list = jsonDecode(res.body) as List<dynamic>;
     return list.map((e) => Product.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<List<Movement>> getMovements(int productId, {int take = 20}) async {
+    final res = await _send(() => http.get(
+          _uri('/api/products/$productId/movements', {'take': '$take'}),
+          headers: _headers,
+        ));
+    final list = jsonDecode(res.body) as List<dynamic>;
+    return list.map((e) => Movement.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  /// Sadece Admin.
+  Future<Product> createProduct({
+    required String barcode,
+    required String name,
+    required String unit,
+    double minStock = 0,
+    double initialStock = 0,
+  }) async {
+    final body = jsonEncode({
+      'barcode': barcode,
+      'name': name,
+      'unit': unit,
+      'minStock': minStock,
+      'initialStock': initialStock,
+    });
+    final res = await _send(() => http.post(_uri('/api/products'), headers: _headers, body: body));
+    return Product.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  /// Sadece Admin.
+  Future<Product> updateProduct(Product product, {required double minStock}) async {
+    final body = jsonEncode({'name': product.name, 'unit': product.unit, 'minStock': minStock});
+    final res = await _send(() => http.put(_uri('/api/products/${product.id}'), headers: _headers, body: body));
+    return Product.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
   Future<Product> getProductByBarcode(String barcode) async {
