@@ -1,0 +1,68 @@
+using System.Security.Claims;
+using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using Scalar.AspNetCore;
+using StokTakip.Api.Data;
+using StokTakip.Api.Endpoints;
+using StokTakip.Api.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// --- Ayarlar ---
+var jwt = builder.Configuration.GetSection("Jwt").Get<JwtOptions>() ?? new JwtOptions();
+if (jwt.Key.Length < 32)
+    throw new InvalidOperationException("Jwt:Key en az 32 karakter olmalı (ortam değişkeni: Jwt__Key).");
+builder.Services.AddSingleton(jwt);
+builder.Services.AddSingleton<TokenService>();
+
+// --- Veritabanı ---
+builder.Services.AddDbContext<AppDbContext>((sp, options) =>
+    options.UseSqlServer(sp.GetRequiredService<IConfiguration>().GetConnectionString("Default")));
+
+// --- Kimlik doğrulama ---
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidIssuer = jwt.Issuer,
+            ValidAudience = jwt.Audience,
+            IssuerSigningKey = jwt.SigningKey(),
+            NameClaimType = ClaimTypes.Name,
+            RoleClaimType = ClaimTypes.Role,
+            ClockSkew = TimeSpan.FromMinutes(1)
+        };
+    });
+builder.Services.AddAuthorization();
+
+// --- API altyapısı ---
+builder.Services.ConfigureHttpJsonOptions(o =>
+    o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+builder.Services.AddProblemDetails();
+builder.Services.AddOpenApi();
+
+var app = builder.Build();
+
+app.UseExceptionHandler();
+app.UseStatusCodePages();
+app.UseAuthentication();
+app.UseAuthorization();
+
+// Demo projesi olduğu için API dokümanı her ortamda açık: /scalar
+app.MapOpenApi();
+app.MapScalarApiReference();
+
+app.MapGet("/health", () => Results.Ok(new { status = "ok" })).WithTags("Health");
+app.MapAuthEndpoints();
+app.MapProductEndpoints();
+app.MapMovementEndpoints();
+
+await DbInitializer.InitializeAsync(app.Services, app.Logger);
+
+app.Run();
+
+// Entegrasyon testlerinde WebApplicationFactory<Program> için.
+public partial class Program;
