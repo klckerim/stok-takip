@@ -367,8 +367,8 @@ class _SectionHeader extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(children: [
-        Text(title, style: Theme.of(context).textTheme.titleMedium),
-        const Spacer(),
+        // Uzun başlık büyük yazıda taşmasın, alt satıra geçsin.
+        Expanded(child: Text(title, style: Theme.of(context).textTheme.titleMedium)),
         if (action != null) TextButton(onPressed: onAction, child: Text(action!)),
       ]),
     );

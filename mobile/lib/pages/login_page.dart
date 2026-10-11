@@ -101,9 +101,10 @@ class _LoginPageState extends State<LoginPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text('Giriş yap', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+                    // "Giriş yap" düğmede yazıyor; başlıkta tekrarlanmaz.
+                    Text('Hoş geldin', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
                     const SizedBox(height: 4),
-                    Text('Depo hesabınla devam et', style: theme.textTheme.bodyMedium),
+                    Text('Depo hesabınla giriş yap', style: theme.textTheme.bodyMedium),
                     const SizedBox(height: 20),
                     TextField(
                       controller: _userName,
