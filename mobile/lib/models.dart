@@ -156,6 +156,20 @@ class MovementListItem {
 
   /// "Giriş +5 Adet", "Çıkış -3 Kg", "Sayım 77 Adet (fark -3)"
   String get summary => describeMovement(type, quantity, countedQuantity, unit);
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'productId': productId,
+        'barcode': barcode,
+        'productName': productName,
+        'unit': unit,
+        'type': type.apiName,
+        'quantity': quantity,
+        'countedQuantity': countedQuantity,
+        'note': note,
+        'userName': userName,
+        'createdAtUtc': createdAt.toUtc().toIso8601String(),
+      };
 }
 
 class Dashboard {
@@ -190,6 +204,16 @@ class Dashboard {
             .map((e) => MovementListItem.fromJson(e as Map<String, dynamic>))
             .toList(),
       );
+
+  Map<String, dynamic> toJson() => {
+        'productCount': productCount,
+        'criticalCount': criticalCount,
+        'todayIn': todayIn,
+        'todayOut': todayOut,
+        'todayCount': todayCount,
+        'criticalProducts': [for (final p in criticalProducts) p.toJson()],
+        'lastMovements': [for (final m in lastMovements) m.toJson()],
+      };
 }
 
 String describeMovement(MovementType type, double quantity, double? countedQuantity, String unit) {
@@ -225,8 +249,22 @@ class Session {
 
 const List<String> units = ['Adet', 'Kg', 'Lt', 'Mt', 'Paket', 'Koli', 'Rulo'];
 
-String formatQty(double value) =>
-    value == value.roundToDouble() ? value.toStringAsFixed(0) : value.toStringAsFixed(3);
+/// Ekranda gösterim için Türkçe miktar: 1.250 / 1,5 / 12.500,25 (en fazla 3 ondalık).
+/// Metin alanına yazılacak değer için [formatQtyInput] kullan.
+String formatQty(double value) {
+  final fixed = value.abs().toStringAsFixed(3);
+  final parts = fixed.split('.');
+  final whole = parts[0].replaceAllMapped(RegExp(r'\B(?=(\d{3})+$)'), (_) => '.');
+  final frac = parts[1].replaceFirst(RegExp(r'0+$'), '');
+  final sign = value < 0 && double.parse(fixed) != 0 ? '-' : '';
+  return '$sign$whole${frac.isEmpty ? '' : ',$frac'}';
+}
+
+/// Metin alanı için binlik ayırıcısız miktar: 1250 / 1,5. Ayrıştırırken ',' → '.' yapılır.
+String formatQtyInput(double value) => formatQty(value).replaceAll('.', '');
+
+/// Tartılan/ölçülen birimler: toplu okutmada her okutma +1 sayılmaz, miktar sorulur.
+bool isMeasuredUnit(String unit) => const {'Kg', 'Lt', 'Mt'}.contains(unit);
 
 String formatDateTime(DateTime d) {
   String two(int n) => n.toString().padLeft(2, '0');

@@ -3,9 +3,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// Uygulama sürümü (giriş ekranında gösterilir). pubspec.yaml ile aynı tutulmalı.
 const String appVersion = '0.2.0';
 
-/// Giriş ekranında demo hesap düğmeleri. Gerçek kurulumda kapatmak için:
-///   flutter run --dart-define=DEMO=false
-const bool showDemoAccounts = bool.fromEnvironment('DEMO', defaultValue: true);
+/// Giriş ekranında demo hesap düğmeleri (şifreler uygulamaya gömülü). Varsayılan kapalı;
+/// demo/geliştirme derlemesinde açmak için:
+///   flutter run --dart-define=DEMO=true
+const bool showDemoAccounts = bool.fromEnvironment('DEMO', defaultValue: false);
 
 /// API adresi. Varsayılan derleme sırasında verilir:
 ///   flutter run --dart-define=API_BASE_URL=http://192.168.1.20:8080

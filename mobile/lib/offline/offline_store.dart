@@ -86,9 +86,11 @@ class OfflineStore extends ChangeNotifier {
 
   static const _queueKey = 'pending_movements';
   static const _productsKey = 'product_cache';
+  static const _dashboardKey = 'dashboard_cache';
 
   List<PendingMovement> _pending = [];
   List<Product> _products = [];
+  ({Dashboard data, DateTime savedAt})? _dashboard;
   bool _syncing = false;
 
   List<PendingMovement> get pending => List.unmodifiable(_pending);
@@ -109,6 +111,7 @@ class OfflineStore extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     _pending = _decodeList(prefs.getString(_queueKey), PendingMovement.fromJson);
     _products = _decodeList(prefs.getString(_productsKey), Product.fromJson);
+    _dashboard = _decodeDashboard(prefs.getString(_dashboardKey));
     notifyListeners();
   }
 
@@ -128,6 +131,34 @@ class OfflineStore extends ChangeNotifier {
       if (p.barcode == barcode) return p;
     }
     return null;
+  }
+
+  // --- Özet önbelleği ---
+
+  /// Son başarılı özet; çevrimdışı açılışta "son güncelleme" etiketiyle gösterilir.
+  ({Dashboard data, DateTime savedAt})? get cachedDashboard => _dashboard;
+
+  Future<void> cacheDashboard(Dashboard data) async {
+    final savedAt = DateTime.now();
+    _dashboard = (data: data, savedAt: savedAt);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _dashboardKey,
+      jsonEncode({'savedAt': savedAt.toUtc().toIso8601String(), 'data': data.toJson()}),
+    );
+  }
+
+  static ({Dashboard data, DateTime savedAt})? _decodeDashboard(String? raw) {
+    if (raw == null) return null;
+    try {
+      final json = jsonDecode(raw) as Map<String, dynamic>;
+      return (
+        data: Dashboard.fromJson(json['data'] as Map<String, dynamic>),
+        savedAt: DateTime.parse(json['savedAt'] as String).toLocal(),
+      );
+    } catch (_) {
+      return null; // eski/bozuk kayıt: önbellek yok say
+    }
   }
 
   // --- Kuyruk ---

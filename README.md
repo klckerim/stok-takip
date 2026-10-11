@@ -106,11 +106,13 @@ flutter pub get
 
 ```bash
 # Android emülatörü (bilgisayardaki API'ye 10.0.2.2 ile gider)
-flutter run
+flutter run --dart-define=DEMO=true
 
 # Gerçek telefon: bilgisayarın yerel IP'sini ver (telefon ve bilgisayar aynı Wi-Fi'de)
-flutter run --dart-define=API_BASE_URL=http://192.168.1.20:8080
+flutter run --dart-define=DEMO=true --dart-define=API_BASE_URL=http://192.168.1.20:8080
 ```
+
+`DEMO=true` giriş ekranındaki demo hesap düğmelerini açar (şifreler uygulamaya gömülüdür). Gerçek kurulum derlemesinde bu bayrağı verme; varsayılan kapalıdır.
 
 Emülatörde kamera yoksa barkod ekranındaki **Elle gir** ile demo barkodlardan birini yaz.
 

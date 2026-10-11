@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
 import '../config.dart';
+import '../theme.dart';
 import 'home_page.dart';
 
 enum _ServerStatus { checking, online, offline }
@@ -195,14 +196,13 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Widget _buildHeader(ThemeData theme) {
-    final scheme = theme.colorScheme;
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [const Color(0xFF175A4A), scheme.primary],
+          colors: [brandDark, brandSeed],
         ),
         borderRadius: const BorderRadius.vertical(bottom: Radius.circular(32)),
       ),
@@ -250,7 +250,7 @@ class _LoginPageState extends State<LoginPage> {
   Widget _buildServerChip(ColorScheme scheme) {
     final (color, text) = switch (_server) {
       _ServerStatus.checking => (scheme.outline, 'kontrol ediliyor'),
-      _ServerStatus.online => (Colors.green, 'bağlı'),
+      _ServerStatus.online => (MovementColors.of(context).success, 'bağlı'),
       _ServerStatus.offline => (scheme.error, 'ulaşılamıyor'),
     };
     return ActionChip(
@@ -340,7 +340,7 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
             autocorrect: false,
             decoration: const InputDecoration(
               hintText: '192.168.0.101:8080',
-              helperText: 'Mac\'in IP adresi ve port. Canlıda https://... adresi.',
+              helperText: 'Örn. 192.168.1.20:8080 veya https://stok.firma.com',
             ),
             onChanged: (_) => setState(() => _testOk = null),
           ),
@@ -357,7 +357,7 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
             if (_testOk != null)
               Icon(
                 _testOk! ? Icons.check_circle : Icons.cancel,
-                color: _testOk! ? Colors.green : scheme.error,
+                color: _testOk! ? MovementColors.of(context).success : scheme.error,
               ),
           ]),
           if (_testOk == false) ...[
