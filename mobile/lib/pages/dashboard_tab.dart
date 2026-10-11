@@ -9,7 +9,8 @@ import 'batch_scan_page.dart';
 import 'movements_tab.dart';
 import 'products_tab.dart';
 
-/// Özet: ürün ve kritik sayısı, bugünün hareketleri, kritik ürünler, son hareketler.
+/// Özet: ürün ve kritik sayısı, bugünün hareketleri, kritik ürünler,
+/// yakında tükenecekler, incelenmesi gereken hareketler, son hareketler.
 class DashboardTab extends StatefulWidget {
   const DashboardTab({
     super.key,
@@ -20,6 +21,7 @@ class DashboardTab extends StatefulWidget {
     required this.onShowMovements,
     required this.onStartBatch,
     this.loader,
+    this.insightsLoader,
   });
 
   final ValueNotifier<int> refresh;
@@ -33,6 +35,10 @@ class DashboardTab extends StatefulWidget {
   /// Özeti getiren fonksiyon; testlerde sahte veri vermek için. Varsayılan: API.
   final Future<Dashboard> Function()? loader;
 
+  /// Tükenme tahmini ve şüpheli hareketleri getiren fonksiyon. Varsayılan: API;
+  /// ama testte [loader] verilip bu verilmezse ağa gidilmez, bölümler gizlenir.
+  final Future<Insights> Function()? insightsLoader;
+
   @override
   State<DashboardTab> createState() => _DashboardTabState();
 }
@@ -40,6 +46,9 @@ class DashboardTab extends StatefulWidget {
 class _DashboardTabState extends State<DashboardTab> {
   final _offline = OfflineStore.instance;
   Dashboard? _data;
+
+  /// Tahmin ve anomaliler. Yüklenemezse (çevrimdışı, eski sunucu) null: bölümler görünmez.
+  Insights? _insights;
   bool _loading = true;
   String? _error;
 
@@ -65,6 +74,8 @@ class _DashboardTabState extends State<DashboardTab> {
       _loading = true;
       _error = null;
     });
+    // Özetle paralel; özeti bekletmez, hatası özeti bozmaz.
+    final insights = _loadInsights();
     try {
       final data = await (widget.loader ?? ApiClient.instance.getDashboard)();
       if (!mounted) return;
@@ -92,6 +103,20 @@ class _DashboardTabState extends State<DashboardTab> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+    await insights;
+  }
+
+  Future<void> _loadInsights() async {
+    final Future<Insights> Function()? loader =
+        widget.insightsLoader ?? (widget.loader == null ? () => ApiClient.instance.getInsights() : null);
+    if (loader == null) return;
+    try {
+      final data = await loader();
+      if (mounted) setState(() => _insights = data);
+    } catch (_) {
+      // Ek bilgi; yüklenemezse sessizce gizlenir (yetki hatasını özet isteği zaten yakalar).
+      if (mounted) setState(() => _insights = null);
+    }
   }
 
   @override
@@ -101,6 +126,8 @@ class _DashboardTabState extends State<DashboardTab> {
     final data = _data;
     final session = ApiClient.instance.session;
     final cachedAt = _cachedAt;
+    // Çevrimdışı önbellekten gösterilirken tahminler eski kalır; gösterme.
+    final insights = cachedAt == null ? _insights : null;
 
     if (data == null) {
       if (_loading) return const Center(child: CircularProgressIndicator());
@@ -220,6 +247,34 @@ class _DashboardTabState extends State<DashboardTab> {
               ]),
             ),
           ],
+          if (insights != null && insights.stockouts.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            const _SectionHeader(title: 'Yakında tükenecek'),
+            _SectionNote('Son ${insights.windowDays} günün ortalama çıkışına göre tahmin'),
+            Card(
+              margin: EdgeInsets.zero,
+              child: Column(children: [
+                for (final s in insights.stockouts)
+                  _StockoutTile(
+                    item: s,
+                    leadTimeDays: insights.leadTimeDays,
+                    onTap: () => widget.onOpenProduct(s.product),
+                  ),
+              ]),
+            ),
+          ],
+          if (insights != null && insights.anomalies.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            const _SectionHeader(title: 'İncelenmesi gereken hareketler'),
+            const _SectionNote('Ürünün kendi geçmişine göre olağan dışı çıkışlar ve büyük sayım farkları'),
+            Card(
+              margin: EdgeInsets.zero,
+              child: Column(children: [
+                for (final a in insights.anomalies)
+                  _AnomalyTile(item: a, onTap: () => widget.onOpenProductByBarcode(a.barcode)),
+              ]),
+            ),
+          ],
           const SizedBox(height: 24),
           _SectionHeader(
             title: 'Son hareketler',
@@ -316,6 +371,81 @@ class _SectionHeader extends StatelessWidget {
         const Spacer(),
         if (action != null) TextButton(onPressed: onAction, child: Text(action!)),
       ]),
+    );
+  }
+}
+
+/// Bölüm başlığının altındaki açıklama: tahminin neye dayandığını söyler.
+class _SectionNote extends StatelessWidget {
+  const _SectionNote(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(text, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+    );
+  }
+}
+
+/// "Koli bandı — Stok 12 Adet · günde 2,1 · ~6 gün yeter (17.10.2026)".
+/// Tedarik süresinden önce bitecekse kırmızı: şimdi sipariş verilmeli.
+class _StockoutTile extends StatelessWidget {
+  const _StockoutTile({required this.item, required this.leadTimeDays, required this.onTap});
+
+  final StockoutForecast item;
+  final int leadTimeDays;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final p = item.product;
+    final urgent = item.daysLeft <= leadTimeDays;
+    final color = urgent ? theme.colorScheme.error : theme.colorScheme.tertiary;
+    final left = item.daysLeft <= 0
+        ? 'stok bitti'
+        : '${formatDaysLeft(item.daysLeft)} yeter (${formatDate(item.stockoutDate)})';
+    return ListTile(
+      leading: Icon(Icons.trending_down, color: color),
+      title: Text(p.name),
+      subtitle: Text.rich(TextSpan(children: [
+        TextSpan(text: 'Stok ${formatQty(p.stock)} ${p.unit} · günde ${formatRate(item.avgDailyOut)} · '),
+        TextSpan(
+          text: left,
+          style: TextStyle(color: urgent ? theme.colorScheme.error : null, fontWeight: urgent ? FontWeight.w600 : null),
+        ),
+      ])),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: onTap,
+    );
+  }
+}
+
+/// "Koli bandı — Normalin 6 katı çıkış (ortalama 10 Adet) / 09.10.2026 14:20 · Depo Personeli".
+class _AnomalyTile extends StatelessWidget {
+  const _AnomalyTile({required this.item, required this.onTap});
+
+  final MovementAnomaly item;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ListTile(
+      leading: MovementIcon(item.type),
+      title: Text(item.productName),
+      subtitle: Text.rich(TextSpan(children: [
+        TextSpan(text: item.reason, style: TextStyle(color: theme.colorScheme.error)),
+        TextSpan(text: '\n${describeMovement(item.type, item.quantity, item.countedQuantity, item.unit)}'),
+        TextSpan(text: '\n${formatDateTime(item.createdAt)} · ${item.userName}'),
+      ])),
+      isThreeLine: true,
+      trailing: const Icon(Icons.chevron_right),
+      onTap: onTap,
     );
   }
 }

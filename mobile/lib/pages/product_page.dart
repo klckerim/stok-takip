@@ -6,17 +6,24 @@ import '../main.dart';
 import '../models.dart';
 import '../offline/offline_store.dart';
 import '../theme.dart';
+import '../widgets/demand_chart.dart';
 import 'edit_product_page.dart';
 
-/// Ürün ekranı: stok, giriş/çıkış/sayım kaydı, son hareketler.
+/// Ürün ekranı: stok, tüketim tahmini, ML talep tahmini, giriş/çıkış/sayım kaydı, son hareketler.
 /// "Kaydet ve sıradakini okut" ile kaydedilirse `true` döndürür; çağıran taramayı yeniden açar.
 class ProductPage extends StatefulWidget {
-  const ProductPage({super.key, required this.product, this.autofocusQuantity = false});
+  const ProductPage({super.key, required this.product, this.autofocusQuantity = false, this.forecastLoader, this.demandLoader});
 
   final Product product;
 
   /// Barkod okutularak açıldıysa miktar alanı odaklanır (bir dokunuş daha az).
   final bool autofocusQuantity;
+
+  /// Tahmini getiren fonksiyon; testlerde sahte veri için. Varsayılan: API.
+  final Future<ProductForecast> Function(int productId)? forecastLoader;
+
+  /// ML talep tahminini getiren fonksiyon; testlerde sahte veri için. Varsayılan: API.
+  final Future<DemandForecast> Function(int productId)? demandLoader;
 
   @override
   State<ProductPage> createState() => _ProductPageState();
@@ -43,6 +50,13 @@ class _ProductPageState extends State<ProductPage> {
   List<Movement> _movements = [];
   bool _loadingMovements = true;
 
+  /// Tüketim tahmini. Yüklenemezse (çevrimdışı, eski sunucu) null: kart görünmez.
+  ProductForecast? _forecast;
+  bool _applyingMinStock = false;
+
+  /// ML.NET talep tahmini. Yüklenemezse (çevrimdışı, eski sunucu) null: kart görünmez.
+  DemandForecast? _demand;
+
   // Aynı kayıt için sabit kalır: ağ hatasından sonra "Kaydet"e tekrar basılırsa
   // sunucu hareketi iki kez yazmaz. Başarılı kayıttan sonra yenilenir.
   String _requestId = _uuid.v4();
@@ -54,6 +68,8 @@ class _ProductPageState extends State<ProductPage> {
     super.initState();
     _quantity.addListener(_onQuantityChanged);
     _loadMovements();
+    _loadForecast();
+    _loadDemand();
   }
 
   // Kaydet etiketi, stok uyarısı ve sayım farkı girilen miktara göre güncellenir.
@@ -75,6 +91,50 @@ class _ProductPageState extends State<ProductPage> {
       if (e.isUnauthorized) return handleUnauthorized(context);
     } finally {
       if (mounted) setState(() => _loadingMovements = false);
+    }
+  }
+
+  Future<void> _loadForecast() async {
+    try {
+      final f = await (widget.forecastLoader ?? _api.getProductForecast)(_product.id);
+      if (mounted) setState(() => _forecast = f);
+    } catch (_) {
+      // Ek bilgi; yüklenemezse kart gizli kalır.
+    }
+  }
+
+  Future<void> _loadDemand() async {
+    try {
+      final d = await (widget.demandLoader ?? _api.getDemandForecast)(_product.id);
+      if (mounted) setState(() => _demand = d);
+    } catch (_) {
+      // Ek bilgi; yüklenemezse kart gizli kalır.
+    }
+  }
+
+  /// Sadece yönetici: önerilen kritik seviyeyi tek dokunuşla uygula.
+  Future<void> _applySuggestedMinStock(double value) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _applyingMinStock = true);
+    try {
+      final updated = await _api.updateProduct(
+        _product.id,
+        name: _product.name,
+        unit: _product.unit,
+        minStock: value,
+        categoryId: _product.categoryId,
+      );
+      if (!mounted) return;
+      setState(() => _product = updated);
+      messenger.showSnackBar(SnackBar(
+        content: Text('Kritik seviye ${formatQty(value)} ${updated.unit} olarak kaydedildi.'),
+      ));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.isUnauthorized) return handleUnauthorized(context);
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _applyingMinStock = false);
     }
   }
 
@@ -120,6 +180,8 @@ class _ProductPageState extends State<ProductPage> {
         return;
       }
       _loadMovements();
+      _loadForecast();
+      _loadDemand();
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.isUnauthorized) return handleUnauthorized(context);
@@ -177,6 +239,7 @@ class _ProductPageState extends State<ProductPage> {
       _product = updated;
       _stock = updated.stock;
     });
+    _loadForecast();
   }
 
   @override
@@ -262,6 +325,15 @@ class _ProductPageState extends State<ProductPage> {
                   controller: _note,
                   decoration: const InputDecoration(labelText: 'Not (isteğe bağlı)', border: OutlineInputBorder()),
                 ),
+                // Analiz kartları formun altında: ekranın asıl işi kayıt girmek, önce o görünür.
+                if (_forecast != null) ...[
+                  const SizedBox(height: 24),
+                  _buildForecastCard(theme, _forecast!, isAdmin),
+                ],
+                if (_demand != null) ...[
+                  const SizedBox(height: 8),
+                  _buildDemandCard(theme, _demand!),
+                ],
                 const SizedBox(height: 32),
                 Text('Son hareketler', style: theme.textTheme.titleMedium),
                 const SizedBox(height: 8),
@@ -305,6 +377,153 @@ class _ProductPageState extends State<ProductPage> {
         ),
       ),
     );
+  }
+
+  /// "Günde ortalama 2,1 Adet çıkış · ~6 gün yeter · önerilen kritik seviye 21".
+  /// Tahmin sunucudaki stoğa göredir; çevrimdışı kayıttan sonra eski kalabilir.
+  Widget _buildForecastCard(ThemeData theme, ProductForecast f, bool isAdmin) {
+    final unit = _product.unit;
+    final muted = theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final left = f.daysLeft;
+    final canApply = isAdmin && f.hasData && f.suggestedMinStock != _product.minStock;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.insights_outlined, size: 20, color: theme.colorScheme.primary),
+              const SizedBox(width: 8),
+              Expanded(child: Text('Tüketim tahmini', style: theme.textTheme.titleSmall)),
+            ]),
+            const SizedBox(height: 8),
+            if (!f.hasData)
+              Text('Son ${f.windowDays} günde çıkış yok; tahmin için veri yetersiz.', style: muted)
+            else ...[
+              Text('Günde ortalama ${formatRate(f.avgDailyOut)} $unit çıkış (son ${f.windowDays} gün)'),
+              if (left != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  left <= 0
+                      ? 'Stok bitti.'
+                      : 'Bu hızla ${formatDaysLeft(left)} yeter'
+                          '${f.stockoutDate == null ? '' : ' (${formatDate(f.stockoutDate!)})'}',
+                  style: TextStyle(
+                    color: f.endsBeforeResupply ? theme.colorScheme.error : null,
+                    fontWeight: f.endsBeforeResupply ? FontWeight.w600 : null,
+                  ),
+                ),
+                if (f.endsBeforeResupply && left > 0)
+                  Text('Tedarik süresi ${f.leadTimeDays} gün: sipariş verme zamanı.',
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error)),
+              ],
+              const SizedBox(height: 12),
+              Text('Önerilen kritik seviye: ${formatQty(f.suggestedMinStock)} $unit'),
+              Text(
+                'Günlük çıkış × (${f.leadTimeDays} gün tedarik + ${f.safetyDays} gün emniyet payı)',
+                style: muted,
+              ),
+              if (canApply) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: FilledButton.tonalIcon(
+                    onPressed: _applyingMinStock ? null : () => _applySuggestedMinStock(f.suggestedMinStock),
+                    icon: _applyingMinStock
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.check),
+                    label: Text('Kritik seviyeyi ${formatQty(f.suggestedMinStock)} yap'),
+                  ),
+                ),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// ML.NET talep tahmini: 14 günlük toplam ve aralık, grafik, modelin test başarısı.
+  /// Modelin ne kadar iyi olduğu (ya da olmadığı) açıkça yazılır; sentetik veriyle eğitildiyse belirtilir.
+  Widget _buildDemandCard(ThemeData theme, DemandForecast d) {
+    final unit = _product.unit;
+    final muted = theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final m = d.model;
+    final level = (m.confidenceLevel * 100).round();
+    final stockout = d.stockoutDate;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.auto_graph, size: 20, color: theme.colorScheme.primary),
+              const SizedBox(width: 8),
+              Expanded(child: Text('Talep tahmini · ML', style: theme.textTheme.titleSmall)),
+            ]),
+            const SizedBox(height: 8),
+            if (!d.available)
+              Text(d.reason ?? 'Tahmin yapılamadı.', style: muted)
+            else ...[
+              Text(
+                'Önümüzdeki ${d.forecast.length} gün: ~${formatQty(d.total.roundToDouble())} $unit çıkış',
+                style: theme.textTheme.titleMedium,
+              ),
+              Text(
+                '%$level aralık: ${formatQty(d.totalLower.roundToDouble())} – ${formatQty(d.totalUpper.roundToDouble())} $unit',
+                style: muted,
+              ),
+              if (stockout != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Bu talep hızıyla stok ${formatDate(stockout)} civarı biter.',
+                  style: TextStyle(color: theme.colorScheme.error, fontWeight: FontWeight.w600),
+                ),
+              ],
+              const SizedBox(height: 12),
+              DemandChart(history: d.history, forecast: d.forecast),
+              const SizedBox(height: 12),
+              Text(_modelSummary(m), style: muted),
+              if ((m.improvement ?? 0) < 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Test döneminde basit ortalama daha isabetliydi; bu tahmini temkinli kullan.',
+                    style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error),
+                  ),
+                ),
+              if (m.usesDemoData)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('Not: Model demo için üretilmiş sentetik geçmişle eğitildi.', style: muted),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// "Poisson regresyon (ML.NET) · 120 günlük geçmiş, 9.800 örnek. Son 14 günlük testte günlük hata 12,9
+  /// (basit ortalama 19,9; %35 daha iyi). Aralığın testteki kapsaması: %82 (hedef %90)."
+  String _modelSummary(DemandModelInfo m) {
+    final parts = <String>[
+      'Poisson regresyon (ML.NET) · ${m.historyDays} günlük geçmiş, ${formatQty(m.trainingRows.toDouble())} örnek.',
+    ];
+    final mae = m.testMae, base = m.baselineMae, imp = m.improvement;
+    if (mae != null && base != null && imp != null) {
+      final cmp = imp >= 0 ? '%${(imp * 100).round()} daha iyi' : '%${(-imp * 100).round()} daha kötü';
+      parts.add('Son 14 günlük testte günlük hata ${formatRate(mae)} (basit ortalama ${formatRate(base)}; $cmp).');
+    }
+    final cov = m.dailyCoverage;
+    if (cov != null) {
+      parts.add('Aralığın testteki kapsaması: %${(cov * 100).round()} (hedef %${(m.confidenceLevel * 100).round()}).');
+    }
+    return parts.join(' ');
   }
 
   /// Altta sabit kaydetme alanı. Düğme hangi işlemin kaydedileceğini rengi ve metniyle söyler;

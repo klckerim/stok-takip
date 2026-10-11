@@ -17,6 +17,9 @@
     </PackageReference>
     <PackageReference Include="ClosedXML" Version="0.105.*" />
     <PackageReference Include="Scalar.AspNetCore" Version="2.*" />
+    <!-- Sadece Microsoft.ML: Poisson regresyon yönetilen kod, ARM64 (Apple Silicon) dahil çalışır.
+         Microsoft.ML.TimeSeries (SSA) Intel MKL gerektirir, ARM64'te çalışmaz; bilinçli olarak eklenmedi. -->
+    <PackageReference Include="Microsoft.ML" Version="5.0.*" />
   </ItemGroup>
 
 </Project>

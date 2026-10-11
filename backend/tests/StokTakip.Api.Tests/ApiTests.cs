@@ -16,9 +16,7 @@ namespace StokTakip.Api.Tests;
 /// </summary>
 public class ApiFixture : IAsyncLifetime
 {
-    private readonly MsSqlContainer _db = new MsSqlBuilder()
-        .WithImage("mcr.microsoft.com/mssql/server:2022-latest")
-        .Build();
+    private readonly MsSqlContainer _db = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
 
     public WebApplicationFactory<Program> Factory { get; private set; } = null!;
 
@@ -230,6 +228,76 @@ public class ApiTests(ApiFixture fixture) : IClassFixture<ApiFixture>
         var del = await admin.DeleteAsync($"/api/categories/{category.Id}");
         Assert.Equal(HttpStatusCode.NoContent, del.StatusCode);
         Assert.Null((await GetByBarcode(admin, "8690000000042")).CategoryId);
+    }
+
+    [Fact]
+    public async Task Insights_show_stockout_forecasts_from_demo_history()
+    {
+        var client = await LoggedInClient();
+        var insights = await client.GetFromJsonAsync<InsightsDto>("/api/insights", Json);
+
+        Assert.NotNull(insights);
+        Assert.NotEmpty(insights!.Stockouts);
+        Assert.All(insights.Stockouts, s => Assert.True(s.AvgDailyOut > 0 && s.DaysLeft <= 30));
+        Assert.Contains(insights.Anomalies, a => a.Type == MovementType.Out); // demo geçmişindeki olağan dışı çıkış
+    }
+
+    [Fact]
+    public async Task Big_count_difference_appears_in_anomalies()
+    {
+        var client = await LoggedInClient();
+        var product = await GetByBarcode(client, "8690000000042");
+
+        await client.PostAsJsonAsync("/api/movements",
+            new CreateMovementRequest(product.Id, MovementType.Count, Math.Round(product.Stock * 0.6m), "büyük fark", null), Json);
+        var insights = await client.GetFromJsonAsync<InsightsDto>("/api/insights", Json);
+
+        Assert.Contains(insights!.Anomalies, a => a.ProductId == product.Id && a.Type == MovementType.Count);
+    }
+
+    [Fact]
+    public async Task Product_forecast_returns_daily_average()
+    {
+        var client = await LoggedInClient();
+        var product = await GetByBarcode(client, PaletBarcode);
+
+        var f = await client.GetFromJsonAsync<ProductForecastDto>($"/api/products/{product.Id}/forecast", Json);
+
+        Assert.True(f!.AvgDailyOut > 0);
+        Assert.NotNull(f.DaysLeft);
+        Assert.True(f.SuggestedMinStock > 0);
+    }
+
+    [Fact]
+    public async Task Demand_forecast_uses_trained_ml_model()
+    {
+        var client = await LoggedInClient();
+        var product = await GetByBarcode(client, KoliBarcode);
+
+        var f = await client.GetFromJsonAsync<DemandForecastDto>($"/api/products/{product.Id}/demand-forecast", Json);
+
+        Assert.NotNull(f);
+        Assert.True(f!.Available, f.Reason);
+        Assert.True(f.Model.Trained);
+        Assert.NotNull(f.Model.TestMae);
+        Assert.Equal(14, f.Forecast.Count);
+        Assert.NotEmpty(f.History);
+        Assert.All(f.Forecast, p => Assert.True(p.Lower <= p.Forecast && p.Forecast <= p.Upper));
+        Assert.True(f.TotalLower <= f.Total && f.Total <= f.TotalUpper);
+    }
+
+    [Fact]
+    public async Task Only_admin_can_retrain_demand_model()
+    {
+        var depo = await LoggedInClient();
+        Assert.Equal(HttpStatusCode.Forbidden, (await depo.PostAsync("/api/ml/demand-model/train", null)).StatusCode);
+
+        var admin = await LoggedInClient("admin", "Admin123!");
+        var res = await admin.PostAsync("/api/ml/demand-model/train", null);
+        res.EnsureSuccessStatusCode();
+        var info = await res.Content.ReadFromJsonAsync<DemandModelInfoDto>(Json);
+        Assert.True(info!.Trained, info.Reason);
+        Assert.True(info.TrainingRows > 0);
     }
 
     [Fact]

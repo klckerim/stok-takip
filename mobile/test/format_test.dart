@@ -36,4 +36,142 @@ void main() {
     expect(isMeasuredUnit('Lt'), isTrue);
     expect(isMeasuredUnit('Adet'), isFalse);
   });
+
+  test('formatRate okunur yuvarlar', () {
+    expect(formatRate(2.143), '2,1');
+    expect(formatRate(0.043), '0,04');
+    expect(formatRate(123.4), '123');
+    expect(formatRate(1250), '1.250');
+  });
+
+  test('formatDaysLeft', () {
+    expect(formatDaysLeft(0), 'tükendi');
+    expect(formatDaysLeft(0.4), '1 günden az');
+    expect(formatDaysLeft(4.7), '~5 gün');
+  });
+
+  test('ProductForecast API cevabını okur', () {
+    final f = ProductForecast.fromJson({
+      'avgDailyOut': 2.143,
+      'daysLeft': 4.7,
+      'stockoutDateUtc': '2026-10-16T08:00:00Z',
+      'suggestedMinStock': 22,
+      'windowDays': 30,
+      'leadTimeDays': 7,
+      'safetyDays': 3,
+    });
+    expect(f.hasData, isTrue);
+    expect(f.endsBeforeResupply, isTrue);
+    expect(f.stockoutDate!.isUtc, isFalse); // yerel saate çevrilir
+
+    final empty = ProductForecast.fromJson({
+      'avgDailyOut': 0,
+      'daysLeft': null,
+      'stockoutDateUtc': null,
+      'suggestedMinStock': 0,
+      'windowDays': 30,
+      'leadTimeDays': 7,
+      'safetyDays': 3,
+    });
+    expect(empty.hasData, isFalse);
+    expect(empty.endsBeforeResupply, isFalse);
+  });
+
+  test('Insights API cevabını okur', () {
+    final i = Insights.fromJson({
+      'stockouts': [
+        {
+          'product': {'id': 1, 'barcode': '869', 'name': 'Koli bandı', 'unit': 'Adet', 'stock': 10, 'minStock': 5},
+          'avgDailyOut': 2,
+          'daysLeft': 5,
+          'stockoutDateUtc': '2026-10-16T08:00:00',
+          'suggestedMinStock': 20,
+        }
+      ],
+      'anomalies': [
+        {
+          'movementId': 7,
+          'productId': 1,
+          'barcode': '869',
+          'productName': 'Koli bandı',
+          'unit': 'Adet',
+          'type': 'Out',
+          'quantity': -60,
+          'countedQuantity': null,
+          'userName': 'Depo Personeli',
+          'createdAtUtc': '2026-10-09T11:20:00Z',
+          'reason': 'Normalin 6 katı çıkış (ortalama 10 Adet)',
+        }
+      ],
+      'windowDays': 30,
+      'leadTimeDays': 7,
+    });
+    expect(i.stockouts.single.product.name, 'Koli bandı');
+    expect(i.anomalies.single.type, MovementType.outbound);
+    expect(i.anomalies.single.reason, contains('6 katı'));
+  });
+
+  test('DemandForecast API cevabını okur', () {
+    final d = DemandForecast.fromJson({
+      'available': true,
+      'reason': null,
+      'history': [
+        {'date': '2026-10-10', 'quantity': 12},
+      ],
+      'forecast': [
+        {'date': '2026-10-11', 'forecast': 0.4, 'lower': 0, 'upper': 2.1},
+        {'date': '2026-10-12', 'forecast': 14.2, 'lower': 6.3, 'upper': 22.1},
+      ],
+      'total': 14.6,
+      'totalLower': 6,
+      'totalUpper': 23.2,
+      'stockoutDate': '2026-10-12',
+      'model': {
+        'trained': true,
+        'reason': null,
+        'algorithm': 'ML.NET LbfgsPoissonRegression',
+        'trainedAtUtc': '2026-10-11T10:00:00Z',
+        'trainingMs': 850,
+        'trainingRows': 9800,
+        'productCount': 10,
+        'historyDays': 120,
+        'confidenceLevel': 0.9,
+        'calibrated': true,
+        'testMae': 12.85,
+        'baselineMae': 19.9,
+        'dailyCoverage': 0.82,
+        'totalHits': 9,
+        'totalCount': 10,
+        'usesDemoData': true,
+      },
+    });
+    expect(d.forecast, hasLength(2));
+    expect(d.forecast[1].date, DateTime(2026, 10, 12)); // DateOnly → yerel gün, saat kayması yok
+    expect(d.stockoutDate, DateTime(2026, 10, 12));
+    expect(d.model.improvement, closeTo(0.354, 0.001));
+    expect(d.model.usesDemoData, isTrue);
+  });
+
+  test('Eğitilmemiş model nedeni okunur', () {
+    final m = DemandModelInfo.fromJson({
+      'trained': false,
+      'reason': 'ML modeli için yeterli geçmiş yok',
+      'algorithm': 'ML.NET LbfgsPoissonRegression',
+      'trainedAtUtc': null,
+      'trainingMs': 0,
+      'trainingRows': 0,
+      'productCount': 0,
+      'historyDays': 0,
+      'confidenceLevel': 0.9,
+      'calibrated': false,
+      'testMae': null,
+      'baselineMae': null,
+      'dailyCoverage': null,
+      'totalHits': null,
+      'totalCount': null,
+    });
+    expect(m.trained, isFalse);
+    expect(m.improvement, isNull);
+    expect(m.usesDemoData, isFalse);
+  });
 }

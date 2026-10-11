@@ -21,9 +21,14 @@ Depo personeli telefonla ürün barkodunu okutur; giriş, çıkış veya sayım 
 - Rol bazlı yetki: depo personeli hareket girer, yönetici ürün ekler ve kritik seviyeyi değiştirir
 - Çevrimdışı çalışma: depoda bağlantı yokken giriş/çıkış/sayım telefonda kuyruğa alınır, bağlantı gelince kendiliğinden gönderilir
 - Excel raporları (stok ve son 30 gün hareketleri): telefondan indirip WhatsApp, e-posta veya Dosyalar ile paylaşma
+- **Tükenme tahmini:** özet ekranında "Yakında tükenecek" listesi (stok bu hızla kaç gün yeter, hangi gün biter); tedarik süresinden önce bitecekler kırmızı
+- **Kritik seviye önerisi:** ürün ekranında günlük ortalama çıkış ve önerilen kritik seviye; yönetici tek dokunuşla uygular
+- **Şüpheli hareket tespiti:** ürünün kendi geçmişine göre olağan dışı büyük çıkışlar ve büyük sayım farkları özet ekranında "İncelenmesi gereken hareketler" olarak listelenir
+- **ML talep tahmini (ML.NET):** ürün ekranında önümüzdeki 14 günün günlük çıkış tahmini, %90 tahmin aralığı, grafik ve stoğun biteceği gün; modelin test dönemindeki hatası basit ortalamayla karşılaştırılarak gösterilir
 
 - **Mobil:** Flutter (Android / iOS), kamerayla barkod okuma (`mobile_scanner`)
 - **Backend:** ASP.NET Core 10 Minimal API, JWT ile giriş, rol bazlı yetki
+- **Makine öğrenmesi:** ML.NET (Poisson regresyon), API içinde, dış servis yok
 - **Veritabanı:** SQL Server, EF Core
 - **Test:** xUnit + Testcontainers (gerçek SQL Server'a karşı entegrasyon testleri)
 - **Çalıştırma:** Docker Compose
@@ -41,6 +46,51 @@ backend/  .NET API + testler + docker-compose
 - **Idempotency.** Mobil her kayıt için bir `clientRequestId` (GUID) üretir. Zayıf Wi-Fi'de istek tekrar gönderilirse hareket iki kez yazılmaz.
 - **Çevrimdışı kuyruk.** Sunucuya ulaşılamazsa hareket cihazda (SharedPreferences) saklanır; uygulama açılınca, ön plana gelince ve 30 sn'de bir gönderilmeye çalışılır. Aynı `clientRequestId` kullanıldığı için istek aslında sunucuya ulaşmış olsa bile çift kayıt oluşmaz. Hareket, gönderildiği an değil gerçekten yapıldığı an (`occurredAtUtc`) ile kaydedilir. Ürün listesi önbelleğe alındığı için barkod okutma da çevrimdışı çalışır.
 - **Bilinen sınır.** Çevrimdışı sayım, gönderildiği andaki stoğa göre fark yazar; arada başka cihazdan hareket girildiyse sayım onu da düzeltmiş sayılır. Sunucu, stoktan fazla çıkışı gönderim anında reddeder; reddedilen kayıt "Gönderilmeyi bekleyenler" ekranında sebebiyle görünür, tekrar denenebilir ya da silinebilir.
+
+## Tahmin ve anomali tespiti nasıl çalışır
+
+Makine öğrenmesi modeli değil; açıklanabilir istatistik. Küçük bir depoda birkaç aylık veriyle ML modeli eğitmek gürültüyü öğrenir; bu kurallar her sonucu "neden" sorusuna cevap verecek şekilde üretir. Hesaplar `Services/StockInsights.cs` içinde, veritabanından bağımsız saf fonksiyonlar olarak durur ve birim testleriyle doğrulanır.
+
+| Ne | Nasıl |
+| --- | --- |
+| Günlük ortalama çıkış | Son 30 günün çıkış toplamı / 30. Ürün daha yeniyse pencere ilk hareketten bugüne kısaltılır (en az 7 gün), yoksa ortalama düşük çıkar. |
+| Kaç gün yeter | Anlık stok / günlük ortalama çıkış |
+| Önerilen kritik seviye | Günlük ortalama × (tedarik süresi 7 gün + emniyet payı 3 gün) |
+| Olağan dışı çıkış | Son 60 günün çıkışlarına göre: ortalama + 3 standart sapmanın üstünde **ve** ortalamanın en az 2 katı. En az 5 geçmiş çıkış yoksa karar verilmez (az veriyle yanlış alarm olmasın). |
+| Büyük sayım farkı | Fark, sistemdeki stoğun %10'unu aşıyorsa |
+
+Eşikler `appsettings.json` → `Insights` bölümünden değiştirilir (ör. tedarikçiniz 3 günde getiriyorsa `LeadTimeDays: 3`).
+
+**Demo geçmişi (sentetik):** Tahminlerin boş görünmemesi için geliştirme ortamında ilk açılışta her ürüne 120 günlük **üretilmiş** çıkış geçmişi yazılır: haftalık desen (pazartesi yoğun, cumartesi yarım gün, pazar kapalı), ürüne özgü artan/azalan eğilim ve gürültü. Anlık stok değişmez. Mevcut bir veritabanında yeniden üretmek için Scalar'da yönetici olarak `POST /api/demo/history` çağır; önceki demo hareketlerini silip baştan yazar ve ML modelini yeniden eğitir. Sadece `Development` ortamında açıktır; 10'dan fazla gerçek çıkışı olan ürünlere dokunmaz. Uygulama, modelin sentetik veriyle eğitildiğini ekranda belirtir.
+
+## ML talep tahmini nasıl çalışır (ML.NET)
+
+**Soru:** Bu ürün önümüzdeki 14 günde günde kaç adet çıkacak? Stok ne zaman biter?
+
+**Yaklaşım:** Zaman serisini denetimli regresyona çevirmek (perakende talep tahmininde yaygın yöntem). Her örnek: "tahmin anında (origin) bilinenlerle, 1-14 gün sonraki bir günün çıkışı". Tüm ürünler **tek global modelle** eğitilir; ürün başına veri az olsa da toplamda binlerce örnek olur.
+
+| Özellik | Neden |
+| --- | --- |
+| Hedef günün haftanın günü (one-hot) | Pazartesi yoğun, pazar kapalı gibi desenler |
+| log(1 + son 7 gün ortalaması) | Yakın dönem seviyesi, eğilim |
+| log(1 + son 28 gün ortalaması) | Genel seviye; ürünler arası ölçek farkını taşır |
+| log(1 + son 4 haftada aynı günün ortalaması) | Ürüne özgü haftalık desen |
+| Son 28 günde çıkışsız gün oranı | Seyrek satılan ürünler |
+
+**Model:** `LbfgsPoissonRegression` (ML.NET). Günlük çıkış bir sayımdır: Poisson regresyonu negatif tahmin üretmez ve log bağlantısı sayesinde haftanın günü etkisini çarpan olarak öğrenir.
+
+**Neden SSA (ML.NET zaman serisi) değil:** `ForecastBySsa` Intel MKL'e bağlıdır ve ARM64'te (Apple Silicon Mac, ARM sunucular) çalışmaz. Seçilen model tamamen yönetilen koddur; her mimaride çalışır.
+
+**Doğrulama (zamana göre, veri sızıntısı yok):**
+1. *Kalibrasyon:* Son 28 günden önceki veriyle eğit, sonraki 14 günü tahmin et. Ölçekli hataların (|gerçek − tahmin| / √(tahmin+1)) %90'lık dilimi tahmin aralığının genişliğini verir (split conformal). 14 günlük toplam ayrıca kalibre edilir; günlük hatalar birbirinden bağımsız değildir.
+2. *Test:* Son 14 günden önceki veriyle eğit, son 14 günü tahmin et. Modelin hatası, "son 28 gün ortalaması" tahmininin hatası ve aralığın gerçek kapsama oranı ölçülür. **Bu sayılar uygulamada gösterilir**; model basit ortalamadan kötüyse bu da yazılır.
+3. *Son model:* Tüm veriyle eğitilir, bugünden itibaren 14 gün tahmin edilir.
+
+Sentetik demo verisinde (bilinen haftalık desen) model günlük hatayı basit ortalamaya göre yaklaşık %35 azaltır. Bu, yöntemin desen yakaladığını gösterir; **gerçek bir depoda başarıyı göstermez.** Gerçek veride ölçmek için en az 2-3 aylık kullanım gerekir.
+
+**Çalışma şekli:** Model API açılışında ve 6 saatte bir (`Demand:RetrainHours`) arka planda eğitilir, bellekte tutulur. Tahmin isteği modeli eğitmez, sadece kullanır (birkaç ms). Yönetici `POST /api/ml/demand-model/train` ile hemen yeniden eğitebilir. Kod: `Services/Demand/` (özellikler ve eğitim akışı veritabanından bağımsız, birim testli).
+
+**Bilinen sınırlar:** Kampanya, tatil, fiyat gibi dış etkenler modelde yok. Yeni ürün en az 28 günlük geçmiş ister. Çok büyük veride eğitim örnekleri seyreltilir (en fazla 300 bin satır).
 
 ## 1. Backend'i çalıştır
 
@@ -138,6 +188,12 @@ Emülatörde kamera yoksa barkod ekranındaki **Elle gir** ile demo barkodlardan
 | GET | `/api/movements?type=&days=7&productId=` | Giriş | Tüm hareketler, filtreli |
 | GET | `/api/reports/stock.xlsx` | Giriş | Stok raporu (Excel) |
 | GET | `/api/reports/movements.xlsx?days=30` | Giriş | Hareket raporu (Excel) |
+| GET | `/api/insights?days=30` | Giriş | `days` gün içinde tükenecek ürünler ve son 7 günün şüpheli hareketleri |
+| GET | `/api/products/{id}/forecast` | Giriş | Günlük ortalama çıkış, kaç gün yeter, önerilen kritik seviye |
+| GET | `/api/products/{id}/demand-forecast` | Giriş | ML.NET: 14 günlük günlük tahmin, %90 aralık, son 28 günün gerçek çıkışları, stok bitiş günü |
+| GET | `/api/ml/demand-model` | Giriş | Modelin durumu: ne zaman, kaç örnekle eğitildi, test hatası ve kapsama |
+| POST | `/api/ml/demand-model/train` | Admin | Modeli hemen yeniden eğit |
+| POST | `/api/demo/history?days=120` | Admin (sadece Development) | Sentetik demo geçmişini sil ve yeniden üret, modeli yeniden eğit |
 
 Scalar'da (`/scalar`) önce login ol, dönen token'ı **Authentication → Bearer** alanına bir kez yapıştır; tüm isteklerde kullanılır.
 

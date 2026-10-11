@@ -7,6 +7,7 @@ using Scalar.AspNetCore;
 using StokTakip.Api.Data;
 using StokTakip.Api.Endpoints;
 using StokTakip.Api.Services;
+using StokTakip.Api.Services.Demand;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -16,6 +17,11 @@ if (jwt.Key.Length < 32)
     throw new InvalidOperationException("Jwt:Key en az 32 karakter olmalı (ortam değişkeni: Jwt__Key).");
 builder.Services.AddSingleton(jwt);
 builder.Services.AddSingleton<TokenService>();
+builder.Services.AddSingleton(builder.Configuration.GetSection("Insights").Get<InsightOptions>() ?? new InsightOptions());
+
+// --- ML.NET talep tahmini: model bellekte, açılışta ve periyodik olarak arka planda eğitilir ---
+builder.Services.AddSingleton<DemandForecaster>();
+builder.Services.AddHostedService<DemandModelTrainer>();
 
 // --- Veritabanı ---
 builder.Services.AddDbContext<AppDbContext>((sp, options) =>
@@ -62,6 +68,9 @@ app.MapMovementEndpoints();
 app.MapReportEndpoints();
 app.MapDashboardEndpoints();
 app.MapCategoryEndpoints();
+app.MapInsightEndpoints();
+app.MapDemoEndpoints();
+app.MapDemandEndpoints();
 
 await DbInitializer.InitializeAsync(app.Services, app.Logger);
 
