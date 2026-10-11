@@ -60,6 +60,8 @@ app.MapAuthEndpoints();
 app.MapProductEndpoints();
 app.MapMovementEndpoints();
 app.MapReportEndpoints();
+app.MapDashboardEndpoints();
+app.MapCategoryEndpoints();
 
 await DbInitializer.InitializeAsync(app.Services, app.Logger);
 

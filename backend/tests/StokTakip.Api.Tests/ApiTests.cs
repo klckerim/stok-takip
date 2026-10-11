@@ -179,6 +179,60 @@ public class ApiTests(ApiFixture fixture) : IClassFixture<ApiFixture>
     }
 
     [Fact]
+    public async Task Dashboard_shows_counts_and_critical_products()
+    {
+        var client = await LoggedInClient();
+        var dashboard = await client.GetFromJsonAsync<DashboardDto>("/api/dashboard", Json);
+
+        Assert.NotNull(dashboard);
+        Assert.True(dashboard!.ProductCount >= 5);
+        Assert.True(dashboard.CriticalCount >= 1);
+        Assert.Contains(dashboard.CriticalProducts, p => p.Barcode == PaletBarcode);
+        Assert.NotEmpty(dashboard.LastMovements);
+    }
+
+    [Fact]
+    public async Task Movement_list_filters_by_type()
+    {
+        var client = await LoggedInClient();
+        var product = await GetByBarcode(client, KoliBarcode);
+        await client.PostAsJsonAsync("/api/movements",
+            new CreateMovementRequest(product.Id, MovementType.Out, 1, "liste-testi", null), Json);
+
+        var outs = await client.GetFromJsonAsync<List<MovementListItemDto>>("/api/movements?type=Out&days=1", Json);
+
+        Assert.NotNull(outs);
+        Assert.NotEmpty(outs!);
+        Assert.All(outs!, m => Assert.Equal(MovementType.Out, m.Type));
+        Assert.Contains(outs!, m => m.Note == "liste-testi" && m.ProductName == product.Name);
+    }
+
+    [Fact]
+    public async Task Admin_creates_category_and_moves_product_into_it()
+    {
+        var admin = await LoggedInClient("admin", "Admin123!");
+        var name = $"Test-{Guid.NewGuid():N}"[..20];
+
+        var res = await admin.PostAsJsonAsync("/api/categories", new CreateCategoryRequest(name), Json);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var category = await res.Content.ReadFromJsonAsync<CategoryDto>(Json);
+
+        var product = await GetByBarcode(admin, "8690000000042");
+        var upd = await admin.PutAsJsonAsync($"/api/products/{product.Id}",
+            new UpdateProductRequest(product.Name, product.Unit, product.MinStock, category!.Id), Json);
+        Assert.Equal(HttpStatusCode.OK, upd.StatusCode);
+
+        var inCategory = await admin.GetFromJsonAsync<List<ProductDto>>($"/api/products?categoryId={category.Id}", Json);
+        Assert.Single(inCategory!);
+        Assert.Equal(name, inCategory![0].CategoryName);
+
+        // Kategori silinince ürün kategorisiz kalır, silinmez.
+        var del = await admin.DeleteAsync($"/api/categories/{category.Id}");
+        Assert.Equal(HttpStatusCode.NoContent, del.StatusCode);
+        Assert.Null((await GetByBarcode(admin, "8690000000042")).CategoryId);
+    }
+
+    [Fact]
     public async Task Stock_report_is_an_excel_file()
     {
         var client = await LoggedInClient();

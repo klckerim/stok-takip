@@ -15,6 +15,13 @@ public class User
     public required string Role { get; set; }
 }
 
+public class Category
+{
+    public int Id { get; set; }
+    public required string Name { get; set; }
+    public List<Product> Products { get; set; } = [];
+}
+
 public class Product
 {
     public int Id { get; set; }
@@ -24,6 +31,9 @@ public class Product
 
     /// <summary>Kritik stok seviyesi. 0 = takip edilmiyor. Stok bu değere eşit ya da altındaysa ürün kritiktir.</summary>
     public decimal MinStock { get; set; }
+
+    public int? CategoryId { get; set; }
+    public Category? Category { get; set; }
 
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 

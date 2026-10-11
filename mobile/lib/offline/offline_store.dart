@@ -96,6 +96,15 @@ class OfflineStore extends ChangeNotifier {
   int get failedCount => _pending.where((p) => p.error != null).length;
   bool get syncing => _syncing;
 
+  /// Son ürün listesi isteği sunucuya ulaşamadı mı? (Ana ekrandaki "Çevrimdışı" şeridi için.)
+  bool _isOffline = false;
+  bool get isOffline => _isOffline;
+  void setOffline(bool value) {
+    if (_isOffline == value) return;
+    _isOffline = value;
+    notifyListeners();
+  }
+
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     _pending = _decodeList(prefs.getString(_queueKey), PendingMovement.fromJson);

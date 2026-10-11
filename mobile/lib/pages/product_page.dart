@@ -5,6 +5,7 @@ import '../api/api_client.dart';
 import '../main.dart';
 import '../models.dart';
 import '../offline/offline_store.dart';
+import 'edit_product_page.dart';
 
 class ProductPage extends StatefulWidget {
   const ProductPage({super.key, required this.product});
@@ -61,6 +62,12 @@ class _ProductPageState extends State<ProductPage> {
     } finally {
       if (mounted) setState(() => _loadingMovements = false);
     }
+  }
+
+  /// Hızlı miktar düğmeleri: mevcut değerin üstüne ekler.
+  void _addToQuantity(double step) {
+    final current = _parseQuantity() ?? 0;
+    setState(() => _quantity.text = formatQty(current + step));
   }
 
   double? _parseQuantity() => double.tryParse(_quantity.text.trim().replaceAll(',', '.'));
@@ -137,45 +144,16 @@ class _ProductPageState extends State<ProductPage> {
     ));
   }
 
-  /// Sadece yönetici: kritik seviyeyi değiştir.
-  Future<void> _editMinStock() async {
-    final controller = TextEditingController(text: formatQty(_product.minStock));
-    final value = await showDialog<double>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Kritik seviye'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: InputDecoration(
-            suffixText: _product.unit,
-            helperText: '0 = takip yok',
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Vazgeç')),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(double.tryParse(controller.text.trim().replaceAll(',', '.'))),
-            child: const Text('Kaydet'),
-          ),
-        ],
-      ),
+  /// Sadece yönetici: ürün bilgilerini düzenle.
+  Future<void> _edit() async {
+    final updated = await Navigator.of(context).push<Product>(
+      MaterialPageRoute(builder: (_) => EditProductPage(product: _product)),
     );
-    if (value == null || value < 0 || !mounted) return;
-
-    try {
-      final updated = await _api.updateProduct(_product, minStock: value);
-      if (!mounted) return;
-      setState(() {
-        _product = updated;
-        _stock = updated.stock;
-      });
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      if (e.isUnauthorized) return handleUnauthorized(context);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
-    }
+    if (updated == null || !mounted) return;
+    setState(() {
+      _product = updated;
+      _stock = updated.stock;
+    });
   }
 
   @override
@@ -190,9 +168,9 @@ class _ProductPageState extends State<ProductPage> {
         actions: [
           if (isAdmin)
             IconButton(
-              tooltip: 'Kritik seviye',
-              icon: const Icon(Icons.tune),
-              onPressed: _editMinStock,
+              tooltip: 'Düzenle',
+              icon: const Icon(Icons.edit_outlined),
+              onPressed: _edit,
             ),
         ],
       ),
@@ -201,7 +179,10 @@ class _ProductPageState extends State<ProductPage> {
         children: [
           Text(p.name, style: theme.textTheme.titleLarge),
           const SizedBox(height: 4),
-          Text(p.barcode, style: theme.textTheme.bodyMedium),
+          Text(
+            p.categoryName == null ? p.barcode : '${p.barcode} · ${p.categoryName}',
+            style: theme.textTheme.bodyMedium,
+          ),
           const SizedBox(height: 16),
           Card(
             color: _isCritical ? theme.colorScheme.errorContainer : null,
@@ -249,6 +230,19 @@ class _ProductPageState extends State<ProductPage> {
               labelText: _type == MovementType.count ? 'Sayılan miktar (${p.unit})' : 'Miktar (${p.unit})',
               border: const OutlineInputBorder(),
             ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final step in const [1, 5, 10, 50])
+                ActionChip(label: Text('+$step'), onPressed: () => _addToQuantity(step.toDouble())),
+              ActionChip(
+                avatar: const Icon(Icons.backspace_outlined, size: 16),
+                label: const Text('Temizle'),
+                onPressed: () => setState(_quantity.clear),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           TextField(

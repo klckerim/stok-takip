@@ -2,6 +2,7 @@ using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
 using StokTakip.Api.Data;
 using StokTakip.Api.Domain;
+using StokTakip.Api.Services;
 
 namespace StokTakip.Api.Endpoints;
 
@@ -22,12 +23,20 @@ public static class ReportEndpoints
     {
         var rows = await db.Products.AsNoTracking()
             .OrderBy(p => p.Name)
-            .Select(p => new { p.Barcode, p.Name, p.Unit, Stock = p.Movements.Sum(m => m.Quantity), p.MinStock })
+            .Select(p => new
+            {
+                p.Barcode,
+                p.Name,
+                Category = p.Category != null ? p.Category.Name : "",
+                p.Unit,
+                Stock = p.Movements.Sum(m => m.Quantity),
+                p.MinStock
+            })
             .ToListAsync();
 
         using var wb = new XLWorkbook();
         var ws = wb.Worksheets.Add("Stok");
-        WriteHeader(ws, "Barkod", "Ürün", "Birim", "Stok", "Kritik seviye", "Durum");
+        WriteHeader(ws, "Barkod", "Ürün", "Kategori", "Birim", "Stok", "Kritik seviye", "Durum");
 
         var r = 2;
         foreach (var x in rows)
@@ -35,17 +44,18 @@ public static class ReportEndpoints
             var critical = x.MinStock > 0 && x.Stock <= x.MinStock;
             ws.Cell(r, 1).Value = x.Barcode;
             ws.Cell(r, 2).Value = x.Name;
-            ws.Cell(r, 3).Value = x.Unit;
-            ws.Cell(r, 4).Value = (double)x.Stock;
-            ws.Cell(r, 5).Value = (double)x.MinStock;
-            ws.Cell(r, 6).Value = critical ? "KRİTİK" : "";
+            ws.Cell(r, 3).Value = x.Category;
+            ws.Cell(r, 4).Value = x.Unit;
+            ws.Cell(r, 5).Value = (double)x.Stock;
+            ws.Cell(r, 6).Value = (double)x.MinStock;
+            ws.Cell(r, 7).Value = critical ? "KRİTİK" : "";
             if (critical)
-                ws.Range(r, 1, r, 6).Style.Fill.BackgroundColor = XLColor.FromHtml("#FDE2E1");
+                ws.Range(r, 1, r, 7).Style.Fill.BackgroundColor = XLColor.FromHtml("#FDE2E1");
             r++;
         }
 
-        ws.Range(2, 4, Math.Max(r - 1, 2), 5).Style.NumberFormat.Format = "#,##0.###";
-        SetWidths(ws, 16, 36, 8, 12, 14, 10);
+        ws.Range(2, 5, Math.Max(r - 1, 2), 6).Style.NumberFormat.Format = "#,##0.###";
+        SetWidths(ws, 16, 36, 16, 8, 12, 14, 10);
         return File(wb, $"stok-raporu-{LocalNow():yyyy-MM-dd}.xlsx");
     }
 
@@ -128,17 +138,7 @@ public static class ReportEndpoints
         return Results.File(ms.ToArray(), XlsxContentType, fileName);
     }
 
-    // Türkiye 2016'dan beri sabit UTC+3. Sunucuda saat dilimi verisi yoksa da doğru çalışsın.
-    private static readonly TimeZoneInfo Turkey = FindTurkey();
+    private static DateTime ToLocal(DateTime utc) => TurkeyTime.ToLocal(utc);
 
-    private static TimeZoneInfo FindTurkey()
-    {
-        try { return TimeZoneInfo.FindSystemTimeZoneById("Europe/Istanbul"); }
-        catch (Exception) { return TimeZoneInfo.CreateCustomTimeZone("TRT", TimeSpan.FromHours(3), "Türkiye", "Türkiye"); }
-    }
-
-    private static DateTime ToLocal(DateTime utc) =>
-        TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), Turkey);
-
-    private static DateTime LocalNow() => ToLocal(DateTime.UtcNow);
+    private static DateTime LocalNow() => TurkeyTime.Now;
 }

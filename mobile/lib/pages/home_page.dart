@@ -11,10 +11,16 @@ import '../main.dart';
 import '../models.dart';
 import '../offline/offline_store.dart';
 import 'add_product_page.dart';
+import 'batch_scan_page.dart';
+import 'dashboard_tab.dart';
+import 'movements_tab.dart';
 import 'pending_page.dart';
 import 'product_page.dart';
+import 'products_tab.dart';
 import 'scan_page.dart';
 
+/// Uygulamanın kabuğu: alt menü (Özet / Ürünler / Hareketler), barkod okutma düğmesi,
+/// raporlar, çevrimdışı şeridi ve bekleyen kayıtların arka planda gönderimi.
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -23,14 +29,16 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  static const _titles = ['Özet', 'Ürünler', 'Hareketler'];
+
   final _api = ApiClient.instance;
   final _offline = OfflineStore.instance;
-  final _search = TextEditingController();
-  List<Product> _products = [];
-  bool _loading = true;
-  bool _criticalOnly = false;
-  bool _isOffline = false;
-  String? _error;
+
+  /// Sekmeler bunu dinler; değer artınca verilerini yeniden yükler.
+  final _refresh = ValueNotifier<int>(0);
+  final _criticalOnly = ValueNotifier<bool>(false);
+
+  int _tab = 0;
   Timer? _syncTimer;
 
   @override
@@ -41,78 +49,49 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (_offline.waitingCount > 0) _trySync();
     });
-    _load();
+    _trySync();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _syncTimer?.cancel();
-    _search.dispose();
+    _refresh.dispose();
+    _criticalOnly.dispose();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _load(); // uygulamaya dönünce tazele ve kuyruğu gönder
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    final search = _search.text.trim();
-    try {
-      final items = await _api.getProducts(search: search, criticalOnly: _criticalOnly);
-      if (!mounted) return;
-      setState(() {
-        _products = items;
-        _isOffline = false;
-      });
-      if (search.isEmpty && !_criticalOnly) await _offline.cacheProducts(items);
-      await _trySync();
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      if (e.isUnauthorized) return handleUnauthorized(context);
-      if (e.isNetworkError) {
-        setState(() {
-          _isOffline = true;
-          _products = _filterCached(search);
-        });
-        return;
-      }
-      setState(() => _error = e.message);
-    } finally {
-      if (mounted) setState(() => _loading = false);
+    if (state == AppLifecycleState.resumed) {
+      _reloadAll(); // uygulamaya dönünce tazele
+      _trySync();
     }
   }
 
-  /// Çevrimdışıyken son bilinen ürün listesinde arama/filtre.
-  List<Product> _filterCached(String search) {
-    final s = search.toLowerCase();
-    return _offline.cachedProducts
-        .where((p) => s.isEmpty || p.name.toLowerCase().contains(s) || p.barcode.contains(s))
-        .where((p) => !_criticalOnly || p.isCritical)
-        .toList();
-  }
+  void _reloadAll() => _refresh.value++;
 
-  /// Bekleyen kayıtları gönderir; gönderilen olduysa listeyi tazeler.
+  /// Bekleyen kayıtları gönderir; gönderilen olduysa ekranları tazeler.
   Future<void> _trySync() async {
     final result = await _offline.sync();
     if (!mounted || (result.sent == 0 && result.failed == 0)) return;
     final text = '${result.sent} bekleyen kayıt gönderildi'
         '${result.failed > 0 ? ', ${result.failed} kayıt reddedildi' : ''}.';
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
-    if (result.sent > 0) _load();
+    if (result.sent > 0) _reloadAll();
   }
 
-  Future<void> _scan() async {
-    final barcode = await Navigator.of(context).push<String>(
-      MaterialPageRoute(builder: (_) => const ScanPage()),
-    );
-    if (barcode == null || !mounted) return;
+  // --- Ürün açma ---
 
+  Future<void> _openProduct(Product product) async {
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ProductPage(product: product)));
+    if (!mounted) return;
+    _reloadAll(); // stok değişmiş olabilir
+    _trySync();
+  }
+
+  /// Barkoddan ürünü bulup açar. Çevrimdışıysa son bilinen listeden.
+  Future<void> _openByBarcode(String barcode) async {
     try {
       final product = await _api.getProductByBarcode(barcode);
       if (!mounted) return;
@@ -122,7 +101,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (e.isUnauthorized) return handleUnauthorized(context);
       if (e.isNotFound) return _onUnknownBarcode(barcode);
       if (e.isNetworkError) {
-        // Çevrimdışı: ürünü son bilinen listeden bul, hareket kuyruğa yazılsın.
+        _offline.setOffline(true);
         final cached = _offline.findCached(barcode);
         if (cached != null) return _openProduct(cached);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -132,6 +111,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       }
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
     }
+  }
+
+  /// Seri sayım / toplu giriş / toplu çıkış.
+  Future<void> _startBatch(MovementType mode) async {
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => BatchScanPage(mode: mode)));
+    if (!mounted) return;
+    _reloadAll();
+    _trySync();
+  }
+
+  Future<void> _scan() async {
+    final barcode = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const ScanPage()),
+    );
+    if (barcode == null || !mounted) return;
+    await _openByBarcode(barcode);
   }
 
   /// Barkod sistemde yok: yönetici ise ürün eklemeyi önerir.
@@ -164,7 +159,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await _openProduct(product);
   }
 
-  /// Excel raporu seçimi.
+  // --- Raporlar ---
+
   Future<void> _showReports() async {
     final choice = await showModalBottomSheet<String>(
       context: context,
@@ -221,11 +217,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.isUnauthorized) return handleUnauthorized(context);
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+      messenger.showSnackBar(SnackBar(content: Text(e.isNetworkError ? 'Rapor için sunucu bağlantısı gerekiyor.' : e.message)));
     } on FileSystemException {
       messenger.showSnackBar(const SnackBar(content: Text('Rapor dosyası kaydedilemedi.')));
     }
   }
+
+  // --- Çıkış ---
 
   Future<void> _logout() async {
     if (_offline.pending.isNotEmpty) {
@@ -246,31 +244,35 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await handleUnauthorized(context);
   }
 
+  // --- Ekran ---
+
   Widget _buildStatusBanner() {
     return ListenableBuilder(
       listenable: _offline,
       builder: (context, _) {
         final theme = Theme.of(context);
+        final isOffline = _offline.isOffline;
         final waiting = _offline.waitingCount;
         final failed = _offline.failedCount;
-        if (!_isOffline && waiting == 0 && failed == 0) return const SizedBox.shrink();
+        if (!isOffline && waiting == 0 && failed == 0) return const SizedBox.shrink();
 
         final parts = <String>[
-          if (_isOffline) 'Çevrimdışı: son bilinen stok gösteriliyor',
+          if (isOffline) 'Çevrimdışı: son bilinen stok gösteriliyor',
           if (waiting > 0) '$waiting kayıt gönderilmeyi bekliyor',
           if (failed > 0) '$failed kayıt reddedildi',
         ];
+        final hasQueue = (waiting + failed) > 0;
         return Material(
           color: failed > 0 ? theme.colorScheme.errorContainer : theme.colorScheme.secondaryContainer,
           child: ListTile(
             dense: true,
-            leading: Icon(_isOffline ? Icons.cloud_off : Icons.cloud_upload_outlined),
+            leading: Icon(isOffline ? Icons.cloud_off : Icons.cloud_upload_outlined),
             title: Text(parts.join(' · ')),
-            trailing: (waiting + failed) > 0 ? const Icon(Icons.chevron_right) : null,
-            onTap: (waiting + failed) > 0
+            trailing: hasQueue ? const Icon(Icons.chevron_right) : null,
+            onTap: hasQueue
                 ? () async {
                     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PendingPage()));
-                    if (mounted) _load();
+                    if (mounted) _reloadAll();
                   }
                 : null,
           ),
@@ -279,20 +281,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _openProduct(Product product) async {
-    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ProductPage(product: product)));
-    if (mounted) _load(); // stok değişmiş olabilir
-  }
-
   @override
   Widget build(BuildContext context) {
-    final session = _api.session;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Stok'),
+        title: Text(_titles[_tab]),
         actions: [
-          if (session != null)
-            Center(child: Text(session.fullName, style: Theme.of(context).textTheme.bodySmall)),
+          PopupMenuButton<MovementType>(
+            tooltip: 'Seri işlem',
+            icon: const Icon(Icons.playlist_add_check),
+            onSelected: _startBatch,
+            itemBuilder: (_) => [
+              for (final mode in const [MovementType.count, MovementType.inbound, MovementType.outbound])
+                PopupMenuItem(value: mode, child: Text(BatchScanPage.titleFor(mode))),
+            ],
+          ),
           IconButton(
             tooltip: 'Excel raporu',
             icon: const Icon(Icons.file_download_outlined),
@@ -308,43 +311,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       body: Column(
         children: [
           _buildStatusBanner(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: TextField(
-              controller: _search,
-              decoration: InputDecoration(
-                hintText: 'Ürün adı veya barkod ara',
-                prefixIcon: const Icon(Icons.search),
-                border: const OutlineInputBorder(),
-                isDense: true,
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.clear),
-                  onPressed: () {
-                    _search.clear();
-                    _load();
+          Expanded(
+            child: IndexedStack(
+              index: _tab,
+              children: [
+                DashboardTab(
+                  refresh: _refresh,
+                  onOpenProduct: _openProduct,
+                  onOpenProductByBarcode: _openByBarcode,
+                  onShowCritical: () {
+                    _criticalOnly.value = true;
+                    setState(() => _tab = 1);
                   },
+                  onShowMovements: () => setState(() => _tab = 2),
+                  onStartBatch: _startBatch,
                 ),
-              ),
-              textInputAction: TextInputAction.search,
-              onSubmitted: (_) => _load(),
+                ProductsTab(
+                  refresh: _refresh,
+                  criticalOnly: _criticalOnly,
+                  onOpenProduct: _openProduct,
+                ),
+                MovementsTab(
+                  refresh: _refresh,
+                  onOpenProductByBarcode: _openByBarcode,
+                ),
+              ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: FilterChip(
-                avatar: const Icon(Icons.warning_amber_rounded, size: 18),
-                label: const Text('Sadece kritik stok'),
-                selected: _criticalOnly,
-                onSelected: (v) {
-                  setState(() => _criticalOnly = v);
-                  _load();
-                },
-              ),
-            ),
-          ),
-          Expanded(child: _buildList()),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -352,53 +345,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         icon: const Icon(Icons.qr_code_scanner),
         label: const Text('Barkod okut'),
       ),
-    );
-  }
-
-  Widget _buildList() {
-    if (_loading && _products.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(_error!, textAlign: TextAlign.center),
-              const SizedBox(height: 12),
-              OutlinedButton(onPressed: _load, child: const Text('Tekrar dene')),
-            ],
-          ),
-        ),
-      );
-    }
-    if (_products.isEmpty) {
-      return Center(child: Text(_criticalOnly ? 'Kritik seviyede ürün yok.' : 'Ürün bulunamadı.'));
-    }
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView.separated(
-        padding: const EdgeInsets.only(bottom: 96),
-        itemCount: _products.length,
-        separatorBuilder: (_, __) => const Divider(height: 1),
-        itemBuilder: (context, i) {
-          final p = _products[i];
-          final error = Theme.of(context).colorScheme.error;
-          return ListTile(
-            leading: p.isCritical ? Icon(Icons.warning_amber_rounded, color: error) : null,
-            title: Text(p.name),
-            subtitle: Text(p.isCritical
-                ? '${p.barcode} · kritik seviye ${formatQty(p.minStock)}'
-                : p.barcode),
-            trailing: Text(
-              '${formatQty(p.stock)} ${p.unit}',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(color: p.isCritical ? error : null),
-            ),
-            onTap: () => _openProduct(p),
-          );
-        },
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tab,
+        onDestinationSelected: (i) => setState(() => _tab = i),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: 'Özet'),
+          NavigationDestination(icon: Icon(Icons.inventory_2_outlined), selectedIcon: Icon(Icons.inventory_2), label: 'Ürünler'),
+          NavigationDestination(icon: Icon(Icons.swap_vert), label: 'Hareketler'),
+        ],
       ),
     );
   }

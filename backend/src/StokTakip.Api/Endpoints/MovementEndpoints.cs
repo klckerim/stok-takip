@@ -15,6 +15,41 @@ public static class MovementEndpoints
         app.MapPost("/api/movements", Create)
             .WithTags("Movements")
             .RequireAuthorization();
+        app.MapGet("/api/movements", List)
+            .WithTags("Movements")
+            .RequireAuthorization();
+    }
+
+    /// <summary>Tüm depodaki hareketler, yeniden eskiye. Ürün bilgisiyle birlikte.</summary>
+    internal static IQueryable<MovementListItemDto> ListQuery(AppDbContext db) =>
+        db.StockMovements.AsNoTracking()
+            .OrderByDescending(m => m.CreatedAtUtc)
+            .ThenByDescending(m => m.Id)
+            .Select(m => new MovementListItemDto(
+                m.Id, m.ProductId, m.Product.Barcode, m.Product.Name, m.Product.Unit,
+                m.Type, m.Quantity, m.CountedQuantity, m.Note, m.User.UserName, m.CreatedAtUtc));
+
+    /// <summary>
+    /// Hareket listesi. ?type=In|Out|Count, ?days=7 (1-365, Türkiye günü), ?productId=, ?take=100 (en fazla 200).
+    /// </summary>
+    private static async Task<IResult> List(
+        AppDbContext db, MovementType? type, int? productId, int days = 7, int take = 100)
+    {
+        var since = TurkeyTime.TodayStartUtc.AddDays(-(Math.Clamp(days, 1, 365) - 1));
+        var query = db.StockMovements.AsNoTracking().Where(m => m.CreatedAtUtc >= since);
+        if (type is { } t) query = query.Where(m => m.Type == t);
+        if (productId is { } pid) query = query.Where(m => m.ProductId == pid);
+
+        var items = await query
+            .OrderByDescending(m => m.CreatedAtUtc)
+            .ThenByDescending(m => m.Id)
+            .Take(Math.Clamp(take, 1, 200))
+            .Select(m => new MovementListItemDto(
+                m.Id, m.ProductId, m.Product.Barcode, m.Product.Name, m.Product.Unit,
+                m.Type, m.Quantity, m.CountedQuantity, m.Note, m.User.UserName, m.CreatedAtUtc))
+            .ToListAsync();
+
+        return Results.Ok(items);
     }
 
     /// <summary>Çevrimdışı kaydedilen hareket en fazla bu kadar geriye tarihlenebilir.</summary>

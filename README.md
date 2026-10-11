@@ -4,6 +4,15 @@ Depo personeli telefonla ürün barkodunu okutur; giriş, çıkış veya sayım 
 
 **Özellikler**
 
+- Giriş ekranı: demo hesaplarla tek dokunuşla giriş, sunucu bağlantı durumu, uygulama içinden sunucu adresi ayarı
+
+- Özet ekranı: toplam ürün, kritik stok, bugünkü giriş/çıkış/sayım, kritik ürünler, son hareketler
+- Hareketler ekranı: tüm depo hareketleri, tipe (giriş/çıkış/sayım) ve döneme (bugün/7/30 gün) göre filtre
+- Hızlı miktar düğmeleri (+1, +5, +10, +50)
+- Seri sayım / toplu giriş / toplu çıkış: barkodlar art arda okutulur, her okutma +1, sonunda tek seferde kaydedilir (çevrimdışıysa kuyruğa alınır)
+- Kategoriler: ürün listesinde kategori filtresi, yönetici ürün eklerken/düzenlerken yeni kategori açabilir
+- Ürün düzenleme (yönetici): ad, birim, kategori, kritik seviye
+
 - Kamerayla barkod okuma (okununca titreşim), elle barkod girişi
 - Giriş / çıkış / sayım; eksi stoğa düşmeyi engeller
 - Ürün ekranında son hareketler: kim, ne zaman, ne yaptı
@@ -105,17 +114,26 @@ flutter run --dart-define=API_BASE_URL=http://192.168.1.20:8080
 
 Emülatörde kamera yoksa barkod ekranındaki **Elle gir** ile demo barkodlardan birini yaz.
 
+**Sunucu adresi uygulama içinden de değiştirilebilir:** giriş ekranında sağ üstteki ayar ikonu → adresi yaz → "Bağlantıyı test et" → Kaydet. Adres cihazda saklanır; Mac'in IP'si değişince yeniden derlemek gerekmez.
+
+**Uygulama ikonu:** `flutter pub get && dart run flutter_launcher_icons` (kaynak: `mobile/assets/icon/app_icon.png`).
+
 ## API
 
 | Metot | Yol | Yetki | Açıklama |
 | --- | --- | --- | --- |
 | POST | `/api/auth/login` | Herkes | Token al |
-| GET | `/api/products?search=&criticalOnly=` | Giriş | Ürünler, anlık stok, kritik durumu |
+| GET | `/api/products?search=&criticalOnly=&categoryId=` | Giriş | Ürünler, anlık stok, kritik durumu |
 | GET | `/api/products/barcode/{barcode}` | Giriş | Barkodla ürün + stok |
 | GET | `/api/products/{id}/movements` | Giriş | Son hareketler |
 | POST | `/api/products` | Admin | Ürün ekle (açılış stoğu ve kritik seviye isteğe bağlı) |
-| PUT | `/api/products/{id}` | Admin | Ad, birim, kritik seviye güncelle |
+| PUT | `/api/products/{id}` | Admin | Ad, birim, kategori, kritik seviye güncelle |
+| GET | `/api/categories` | Giriş | Kategoriler ve ürün sayıları |
+| POST | `/api/categories` | Admin | Kategori ekle |
+| DELETE | `/api/categories/{id}` | Admin | Kategori sil (ürünler kategorisiz kalır) |
 | POST | `/api/movements` | Giriş | Giriş / çıkış / sayım (`In`, `Out`, `Count`) |
+| GET | `/api/dashboard` | Giriş | Özet ekranı verisi |
+| GET | `/api/movements?type=&days=7&productId=` | Giriş | Tüm hareketler, filtreli |
 | GET | `/api/reports/stock.xlsx` | Giriş | Stok raporu (Excel) |
 | GET | `/api/reports/movements.xlsx?days=30` | Giriş | Hareket raporu (Excel) |
 

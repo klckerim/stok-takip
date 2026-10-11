@@ -1,7 +1,7 @@
 name: stok_takip
 description: Barkodlu depo ve stok uygulaması (Flutter istemcisi).
 publish_to: "none"
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
@@ -21,6 +21,16 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.4
+
+# Uygulama ikonu: flutter pub get && dart run flutter_launcher_icons
+flutter_launcher_icons:
+  image_path: "assets/icon/app_icon.png"
+  ios: true
+  android: false
+  remove_alpha_ios: true
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/icon/app_icon.png

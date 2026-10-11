@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using StokTakip.Api.Contracts;
@@ -20,17 +21,26 @@ public static class ProductEndpoints
         group.MapPut("/{id:int}", Update).RequireAuthorization(p => p.RequireRole(Roles.Admin));
     }
 
+    /// <summary>Ürünü anlık stok ve kategori adıyla DTO'ya çevirir (SQL'e çevrilir).</summary>
+    internal static readonly Expression<Func<Product, ProductDto>> ToDto = p => new ProductDto(
+        p.Id, p.Barcode, p.Name, p.Unit, p.Movements.Sum(m => m.Quantity), p.MinStock,
+        p.CategoryId, p.Category != null ? p.Category.Name : null);
+
     /// <summary>
     /// Ürünler ve anlık stokları.
-    /// ?search= ad veya barkodda arar, ?criticalOnly=true sadece kritik seviyedekileri getirir.
+    /// ?search= ad veya barkodda arar, ?criticalOnly=true sadece kritikler, ?categoryId= kategoriye göre.
     /// </summary>
-    private static async Task<IResult> List(AppDbContext db, string? search, bool criticalOnly = false)
+    private static async Task<IResult> List(AppDbContext db, string? search, int? categoryId, bool criticalOnly = false)
     {
         var query = db.Products.AsNoTracking();
         if (!string.IsNullOrWhiteSpace(search))
         {
             var s = search.Trim();
             query = query.Where(p => p.Name.Contains(s) || p.Barcode.Contains(s));
+        }
+        if (categoryId is { } cid)
+        {
+            query = query.Where(p => p.CategoryId == cid);
         }
         if (criticalOnly)
         {
@@ -39,7 +49,7 @@ public static class ProductEndpoints
 
         var items = await query
             .OrderBy(p => p.Name)
-            .Select(p => new ProductDto(p.Id, p.Barcode, p.Name, p.Unit, p.Movements.Sum(m => m.Quantity), p.MinStock))
+            .Select(ToDto)
             .Take(200)
             .ToListAsync();
 
@@ -51,7 +61,7 @@ public static class ProductEndpoints
     {
         var product = await db.Products.AsNoTracking()
             .Where(p => p.Barcode == barcode.Trim())
-            .Select(p => new ProductDto(p.Id, p.Barcode, p.Name, p.Unit, p.Movements.Sum(m => m.Quantity), p.MinStock))
+            .Select(ToDto)
             .SingleOrDefaultAsync();
 
         return product is null
@@ -81,6 +91,8 @@ public static class ProductEndpoints
         var errors = Validate(req.Name, req.Unit, req.MinStock);
         if (string.IsNullOrWhiteSpace(req.Barcode)) errors["barcode"] = ["Barkod zorunlu."];
         if (req.InitialStock < 0) errors["initialStock"] = ["Açılış stoğu negatif olamaz."];
+        if (req.CategoryId is { } cid && !await db.Categories.AnyAsync(c => c.Id == cid))
+            errors["categoryId"] = ["Kategori bulunamadı."];
         if (errors.Count > 0) return Results.ValidationProblem(errors);
 
         var barcode = req.Barcode.Trim();
@@ -92,7 +104,8 @@ public static class ProductEndpoints
             Barcode = barcode,
             Name = req.Name.Trim(),
             Unit = req.Unit.Trim(),
-            MinStock = req.MinStock
+            MinStock = req.MinStock,
+            CategoryId = req.CategoryId
         };
         if (req.InitialStock > 0)
         {
@@ -108,14 +121,16 @@ public static class ProductEndpoints
         db.Products.Add(product);
         await db.SaveChangesAsync();
 
-        return Results.Created($"/api/products/{product.Id}",
-            new ProductDto(product.Id, product.Barcode, product.Name, product.Unit, req.InitialStock, product.MinStock));
+        var created = await db.Products.AsNoTracking().Where(p => p.Id == product.Id).Select(ToDto).SingleAsync();
+        return Results.Created($"/api/products/{product.Id}", created);
     }
 
-    /// <summary>Ad, birim ve kritik seviye güncellenir. Barkod değişmez.</summary>
+    /// <summary>Ad, birim, kritik seviye ve kategori güncellenir. Barkod değişmez.</summary>
     private static async Task<IResult> Update(int id, UpdateProductRequest req, AppDbContext db)
     {
         var errors = Validate(req.Name, req.Unit, req.MinStock);
+        if (req.CategoryId is { } cid && !await db.Categories.AnyAsync(c => c.Id == cid))
+            errors["categoryId"] = ["Kategori bulunamadı."];
         if (errors.Count > 0) return Results.ValidationProblem(errors);
 
         var product = await db.Products.FindAsync(id);
@@ -125,10 +140,11 @@ public static class ProductEndpoints
         product.Name = req.Name.Trim();
         product.Unit = req.Unit.Trim();
         product.MinStock = req.MinStock;
+        product.CategoryId = req.CategoryId;
         await db.SaveChangesAsync();
 
-        var stock = await db.StockMovements.Where(m => m.ProductId == id).SumAsync(m => m.Quantity);
-        return Results.Ok(new ProductDto(product.Id, product.Barcode, product.Name, product.Unit, stock, product.MinStock));
+        var updated = await db.Products.AsNoTracking().Where(p => p.Id == id).Select(ToDto).SingleAsync();
+        return Results.Ok(updated);
     }
 
     private static Dictionary<string, string[]> Validate(string name, string unit, decimal minStock)

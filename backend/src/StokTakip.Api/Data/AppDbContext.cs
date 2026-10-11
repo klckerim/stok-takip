@@ -7,6 +7,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 {
     public DbSet<User> Users => Set<User>();
     public DbSet<Product> Products => Set<Product>();
+    public DbSet<Category> Categories => Set<Category>();
     public DbSet<StockMovement> StockMovements => Set<StockMovement>();
 
     protected override void OnModelCreating(ModelBuilder b)
@@ -19,8 +20,17 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasIndex(x => x.UserName).IsUnique();
         });
 
+        b.Entity<Category>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(100);
+            e.HasIndex(x => x.Name).IsUnique();
+        });
+
         b.Entity<Product>(e =>
         {
+            // Kategori silinince ürünler kategorisiz kalır, silinmez.
+            e.HasOne(x => x.Category).WithMany(c => c.Products).HasForeignKey(x => x.CategoryId)
+                .OnDelete(DeleteBehavior.SetNull);
             e.Property(x => x.Barcode).HasMaxLength(64);
             e.Property(x => x.Name).HasMaxLength(200);
             e.Property(x => x.Unit).HasMaxLength(20);

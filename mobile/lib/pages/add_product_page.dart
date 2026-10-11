@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../main.dart';
 import '../models.dart';
+import '../widgets/category_field.dart';
 
 /// Okutulan barkod sistemde yoksa yönetici ürünü buradan ekler.
 /// Kaydedilen ürünü geri döndürür.
@@ -20,6 +21,7 @@ class _AddProductPageState extends State<AddProductPage> {
   final _minStock = TextEditingController();
   final _initialStock = TextEditingController();
   String _unit = units.first;
+  int? _categoryId;
   bool _saving = false;
 
   @override
@@ -53,6 +55,7 @@ class _AddProductPageState extends State<AddProductPage> {
         unit: _unit,
         minStock: minStock,
         initialStock: initialStock,
+        categoryId: _categoryId,
       );
       if (!mounted) return;
       Navigator.of(context).pop(product);
@@ -90,6 +93,8 @@ class _AddProductPageState extends State<AddProductPage> {
             items: [for (final u in units) DropdownMenuItem(value: u, child: Text(u))],
             onChanged: (v) => setState(() => _unit = v ?? _unit),
           ),
+          const SizedBox(height: 12),
+          CategoryField(value: _categoryId, onChanged: (v) => setState(() => _categoryId = v)),
           const SizedBox(height: 12),
           TextField(
             controller: _initialStock,

@@ -22,6 +22,27 @@ namespace StokTakip.Api.Data.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("StokTakip.Api.Domain.Category", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("Categories");
+                });
+
             modelBuilder.Entity("StokTakip.Api.Domain.Product", b =>
                 {
                     b.Property<int>("Id")
@@ -34,6 +55,9 @@ namespace StokTakip.Api.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
+
+                    b.Property<int?>("CategoryId")
+                        .HasColumnType("int");
 
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
@@ -56,6 +80,8 @@ namespace StokTakip.Api.Data.Migrations
 
                     b.HasIndex("Barcode")
                         .IsUnique();
+
+                    b.HasIndex("CategoryId");
 
                     b.ToTable("Products");
                 });
@@ -143,6 +169,16 @@ namespace StokTakip.Api.Data.Migrations
                     b.ToTable("Users");
                 });
 
+            modelBuilder.Entity("StokTakip.Api.Domain.Product", b =>
+                {
+                    b.HasOne("StokTakip.Api.Domain.Category", "Category")
+                        .WithMany("Products")
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Category");
+                });
+
             modelBuilder.Entity("StokTakip.Api.Domain.StockMovement", b =>
                 {
                     b.HasOne("StokTakip.Api.Domain.Product", "Product")
@@ -160,6 +196,11 @@ namespace StokTakip.Api.Data.Migrations
                     b.Navigation("Product");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("StokTakip.Api.Domain.Category", b =>
+                {
+                    b.Navigation("Products");
                 });
 
             modelBuilder.Entity("StokTakip.Api.Domain.Product", b =>

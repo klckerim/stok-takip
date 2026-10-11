@@ -40,7 +40,19 @@ class ApiClient {
       };
 
   Uri _uri(String path, [Map<String, String>? query]) =>
-      Uri.parse('$apiBaseUrl$path').replace(queryParameters: query);
+      Uri.parse('${ApiConfig.baseUrl}$path').replace(queryParameters: query);
+
+  /// Sunucu ayakta mı? [baseUrl] verilirse o adres denenir (ayar ekranındaki test için).
+  Future<bool> checkHealth({String? baseUrl}) async {
+    try {
+      final res = await http
+          .get(Uri.parse('${baseUrl ?? ApiConfig.baseUrl}/health'))
+          .timeout(const Duration(seconds: 4));
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
 
   Future<void> restoreSession() async {
     final prefs = await SharedPreferences.getInstance();
@@ -83,10 +95,11 @@ class ApiClient {
     await prefs.remove('role');
   }
 
-  Future<List<Product>> getProducts({String? search, bool criticalOnly = false}) async {
+  Future<List<Product>> getProducts({String? search, bool criticalOnly = false, int? categoryId}) async {
     final query = <String, String>{
       if (search != null && search.isNotEmpty) 'search': search,
       if (criticalOnly) 'criticalOnly': 'true',
+      if (categoryId != null) 'categoryId': '$categoryId',
     };
     final res = await _send(() => http.get(_uri('/api/products', query.isEmpty ? null : query), headers: _headers));
     final list = jsonDecode(res.body) as List<dynamic>;
@@ -102,6 +115,23 @@ class ApiClient {
     return list.map((e) => Movement.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  Future<Dashboard> getDashboard() async {
+    final res = await _send(() => http.get(_uri('/api/dashboard'), headers: _headers));
+    return Dashboard.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  /// Tüm depo hareketleri. [type] null = hepsi; [days] 1 = bugün.
+  Future<List<MovementListItem>> getAllMovements({MovementType? type, int days = 7, int take = 100}) async {
+    final query = <String, String>{
+      'days': '$days',
+      'take': '$take',
+      if (type != null) 'type': type.apiName,
+    };
+    final res = await _send(() => http.get(_uri('/api/movements', query), headers: _headers));
+    final list = jsonDecode(res.body) as List<dynamic>;
+    return list.map((e) => MovementListItem.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
   /// Sadece Admin.
   Future<Product> createProduct({
     required String barcode,
@@ -109,6 +139,7 @@ class ApiClient {
     required String unit,
     double minStock = 0,
     double initialStock = 0,
+    int? categoryId,
   }) async {
     final body = jsonEncode({
       'barcode': barcode,
@@ -116,16 +147,39 @@ class ApiClient {
       'unit': unit,
       'minStock': minStock,
       'initialStock': initialStock,
+      'categoryId': categoryId,
     });
     final res = await _send(() => http.post(_uri('/api/products'), headers: _headers, body: body));
     return Product.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
-  /// Sadece Admin.
-  Future<Product> updateProduct(Product product, {required double minStock}) async {
-    final body = jsonEncode({'name': product.name, 'unit': product.unit, 'minStock': minStock});
-    final res = await _send(() => http.put(_uri('/api/products/${product.id}'), headers: _headers, body: body));
+  /// Sadece Admin. Barkod değişmez; diğer alanlar verilen değerlerle değişir.
+  Future<Product> updateProduct(
+    int productId, {
+    required String name,
+    required String unit,
+    required double minStock,
+    int? categoryId,
+  }) async {
+    final body = jsonEncode({'name': name, 'unit': unit, 'minStock': minStock, 'categoryId': categoryId});
+    final res = await _send(() => http.put(_uri('/api/products/$productId'), headers: _headers, body: body));
     return Product.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  Future<List<Category>> getCategories() async {
+    final res = await _send(() => http.get(_uri('/api/categories'), headers: _headers));
+    final list = jsonDecode(res.body) as List<dynamic>;
+    return list.map((e) => Category.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  /// Sadece Admin.
+  Future<Category> createCategory(String name) async {
+    final res = await _send(() => http.post(
+          _uri('/api/categories'),
+          headers: _headers,
+          body: jsonEncode({'name': name}),
+        ));
+    return Category.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
   Future<Product> getProductByBarcode(String barcode) async {
