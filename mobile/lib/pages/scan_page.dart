@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../widgets/scanner_widgets.dart';
+
 /// Kamerayla barkod okur ve okunan değeri geri döndürür.
 /// Kamerası olmayan emülatörde "Elle gir" ile barkod yazılabilir.
 class ScanPage extends StatefulWidget {
@@ -60,27 +62,12 @@ class _ScanPageState extends State<ScanPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Barkod okut'),
-        actions: [
-          IconButton(
-            tooltip: 'Fener',
-            icon: const Icon(Icons.flashlight_on_outlined),
-            onPressed: () => _controller.toggleTorch(),
-          ),
-        ],
+        actions: [TorchButton(controller: _controller)],
       ),
       body: Stack(
         children: [
-          MobileScanner(controller: _controller, onDetect: _onDetect),
-          Center(
-            child: Container(
-              width: 260,
-              height: 160,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white, width: 2),
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
+          MobileScanner(controller: _controller, onDetect: _onDetect, errorBuilder: scannerErrorBuilder),
+          const ScanFrame(width: 260, height: 160, hint: 'Barkodu çerçeveye hizala'),
           Positioned(
             left: 24,
             right: 24,

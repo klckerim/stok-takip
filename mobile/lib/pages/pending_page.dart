@@ -70,7 +70,10 @@ class PendingPage extends StatelessWidget {
                       ),
                       title: Text('${m.productName} · ${m.type.label} $qty ${m.unit}'),
                       subtitle: Text(
-                        failed ? 'Reddedildi: ${m.error}' : 'Kaydedildi: ${formatDateTime(m.createdAt)}',
+                        // Henüz sunucuda değil; "kaydedildi" demek yanıltıcı olur.
+                        failed
+                            ? 'Reddedildi: ${m.error}'
+                            : 'Telefonda bekliyor · ${formatDateTime(m.createdAt)}',
                         style: failed ? TextStyle(color: theme.colorScheme.error) : null,
                       ),
                       trailing: Row(

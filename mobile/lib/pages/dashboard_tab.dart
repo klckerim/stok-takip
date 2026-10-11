@@ -19,6 +19,7 @@ class DashboardTab extends StatefulWidget {
     required this.onShowCritical,
     required this.onShowMovements,
     required this.onStartBatch,
+    this.loader,
   });
 
   final ValueNotifier<int> refresh;
@@ -28,6 +29,9 @@ class DashboardTab extends StatefulWidget {
   /// Hareketler sekmesini verilen filtreyle açar (ör. "Bugün çıkış" kartı → çıkış + bugün).
   final void Function(MovementFilter filter) onShowMovements;
   final void Function(MovementType mode) onStartBatch;
+
+  /// Özeti getiren fonksiyon; testlerde sahte veri vermek için. Varsayılan: API.
+  final Future<Dashboard> Function()? loader;
 
   @override
   State<DashboardTab> createState() => _DashboardTabState();
@@ -62,7 +66,7 @@ class _DashboardTabState extends State<DashboardTab> {
       _error = null;
     });
     try {
-      final data = await ApiClient.instance.getDashboard();
+      final data = await (widget.loader ?? ApiClient.instance.getDashboard)();
       if (!mounted) return;
       setState(() {
         _data = data;
@@ -154,7 +158,7 @@ class _DashboardTabState extends State<DashboardTab> {
               ),
           ]),
           const SizedBox(height: 16),
-          Row(children: [
+          _equalHeightRow([
             Expanded(
               child: _StatCard(
                 icon: Icons.inventory_2_outlined,
@@ -174,7 +178,7 @@ class _DashboardTabState extends State<DashboardTab> {
             ),
           ]),
           const SizedBox(height: 12),
-          Row(children: [
+          _equalHeightRow([
             Expanded(
               child: _StatCard(
                 icon: movementIconData(MovementType.inbound),
@@ -238,6 +242,11 @@ class _DashboardTabState extends State<DashboardTab> {
   }
 }
 
+/// Kartlar yan yana aynı yükseklikte dursun (büyük yazıda biri iki satıra kayınca da).
+Widget _equalHeightRow(List<Widget> children) => IntrinsicHeight(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
+    );
+
 class _StatCard extends StatelessWidget {
   const _StatCard({
     required this.icon,
@@ -272,7 +281,16 @@ class _StatCard extends StatelessWidget {
             children: [
               Icon(icon, size: 20, color: highlight ? fg : (iconColor ?? fg)),
               const SizedBox(height: 8),
-              Text(value, style: theme.textTheme.headlineSmall?.copyWith(color: fg, fontWeight: FontWeight.w600)),
+              // Sayı asla bölünmesin ("1032" → "10/32"); sığmazsa küçülür.
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  value,
+                  maxLines: 1,
+                  style: theme.textTheme.headlineSmall?.copyWith(color: fg, fontWeight: FontWeight.w600),
+                ),
+              ),
               Text(label, style: theme.textTheme.bodySmall?.copyWith(color: fg)),
             ],
           ),
