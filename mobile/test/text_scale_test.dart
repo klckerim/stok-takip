@@ -14,10 +14,15 @@ import 'package:stok_takip/theme.dart';
 
 /// Büyük yazı boyutunda (erişilebilirlik ayarı) ekranlarda taşma olmamalı.
 /// Test fontu her harfi kare çizip gerçeğinden ~2 kat geniş ölçtüğü için SDK'daki Roboto yüklenir;
-/// bulunamazsa testler atlanır.
+/// bulunamazsa testler atlanır. CI'da (CI=true) atlanmak yerine kırmızı olur: aksi halde testler hiç
+/// çalışmadığı halde yeşil görünürdü.
 void main() {
   final fontsDir = '${Platform.environment['FLUTTER_ROOT']}/bin/cache/artifacts/material_fonts';
   final hasFonts = File('$fontsDir/Roboto-Regular.ttf').existsSync();
+
+  test('CI ortamında Roboto bulunur (yazı boyutu testleri atlanmasın)', () {
+    expect(hasFonts, isTrue, reason: '$fontsDir altında Roboto-Regular.ttf yok');
+  }, skip: Platform.environment['CI'] != 'true');
 
   setUpAll(() async {
     if (!hasFonts) return;

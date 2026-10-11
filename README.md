@@ -1,5 +1,7 @@
 # Stok Takip — Barkodlu Depo ve Stok Uygulaması
 
+[![CI](https://github.com/klckerim/stok-takip/actions/workflows/ci.yml/badge.svg)](https://github.com/klckerim/stok-takip/actions/workflows/ci.yml)
+
 Depo personeli telefonla ürün barkodunu okutur; giriş, çıkış veya sayım kaydeder. Stok anında güncellenir.
 
 **Özellikler**
@@ -129,6 +131,16 @@ Docker açık olmalı (testler geçici bir SQL Server container'ı başlatır).
 cd backend
 dotnet test
 ```
+
+Mobil:
+
+```bash
+cd mobile
+flutter analyze
+flutter test
+```
+
+**CI:** Her PR'da ve `main`'e her push'ta GitHub Actions (`.github/workflows/ci.yml`) ikisini de çalıştırır: Flutter `analyze` + `test` ve .NET `build` + `test` (gerçek SQL Server container'ıyla).
 
 ## 3. Mobil uygulamayı çalıştır
 
