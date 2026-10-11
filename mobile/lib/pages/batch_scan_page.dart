@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -7,6 +9,7 @@ import '../api/api_client.dart';
 import '../main.dart';
 import '../models.dart';
 import '../offline/offline_store.dart';
+import '../widgets/scanner_widgets.dart';
 
 /// Seri işlem: barkodlar art arda okutulur, her okutma ilgili ürünün miktarını 1 artırır.
 /// Kg/Lt/Mt gibi ölçülen birimlerde +1 anlamsız olduğu için okutunca miktar sorulur.
@@ -55,6 +58,10 @@ class _BatchScanPageState extends State<BatchScanPage> {
   bool _saving = false;
   bool _paused = false;
 
+  /// Son okutulan kalem kısa süre vurgulanır: titreşimi duymayan/hissetmeyen de okunduğunu görsün.
+  _Line? _flash;
+  Timer? _flashTimer;
+
   @override
   void initState() {
     super.initState();
@@ -63,6 +70,7 @@ class _BatchScanPageState extends State<BatchScanPage> {
 
   @override
   void dispose() {
+    _flashTimer?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -100,6 +108,11 @@ class _BatchScanPageState extends State<BatchScanPage> {
       _lines
         ..remove(line)
         ..insert(0, line); // son okutulan en üstte
+      _flash = line;
+    });
+    _flashTimer?.cancel();
+    _flashTimer = Timer(const Duration(milliseconds: 700), () {
+      if (mounted) setState(() => _flash = null);
     });
     if (measured) {
       _askMeasured(line, isNew: existing == null);
@@ -378,11 +391,7 @@ class _BatchScanPageState extends State<BatchScanPage> {
           title: Text(BatchScanPage.titleFor(widget.mode)),
           actions: [
             IconButton(tooltip: 'Elle gir', icon: const Icon(Icons.keyboard), onPressed: _manualEntry),
-            IconButton(
-              tooltip: 'Fener',
-              icon: const Icon(Icons.flashlight_on_outlined),
-              onPressed: () => _controller.toggleTorch(),
-            ),
+            TorchButton(controller: _controller),
           ],
         ),
         body: Column(
@@ -392,17 +401,8 @@ class _BatchScanPageState extends State<BatchScanPage> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  MobileScanner(controller: _controller, onDetect: _onDetect),
-                  Center(
-                    child: Container(
-                      width: 240,
-                      height: 110,
-                      decoration: BoxDecoration(
-                        border: Border.all(color: _paused ? Colors.grey : Colors.white, width: 2),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
+                  MobileScanner(controller: _controller, onDetect: _onDetect, errorBuilder: scannerErrorBuilder),
+                  ScanFrame(width: 240, height: 110, active: !_paused),
                 ],
               ),
             ),
@@ -459,59 +459,63 @@ class _BatchScanPageState extends State<BatchScanPage> {
         child: const Icon(Icons.delete_outline),
       ),
       onDismissed: (_) => _remove(line),
-      child: ListTile(
-        title: Text(
-          p?.name ?? line.barcode,
-          style: hasProblem ? TextStyle(color: theme.colorScheme.error) : null,
-        ),
-        subtitle: Text(
-          line.looking
-              ? 'Aranıyor…'
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        color: identical(_flash, line) ? theme.colorScheme.primaryContainer : Colors.transparent,
+        child: ListTile(
+          title: Text(
+            p?.name ?? line.barcode,
+            style: hasProblem ? TextStyle(color: theme.colorScheme.error) : null,
+          ),
+          subtitle: Text(
+            line.looking
+                ? 'Aranıyor…'
+                : hasProblem
+                    ? '${line.barcode} · ${line.problem}'
+                    : widget.mode == MovementType.count
+                        ? '${line.barcode} · sistemde ${formatQty(p!.stock)} ${p.unit}'
+                        : line.barcode,
+            style: hasProblem ? TextStyle(color: theme.colorScheme.error) : null,
+          ),
+          trailing: line.looking
+              ? null
               : hasProblem
-                  ? '${line.barcode} · ${line.problem}'
-                  : widget.mode == MovementType.count
-                      ? '${line.barcode} · sistemde ${formatQty(p!.stock)} ${p.unit}'
-                      : line.barcode,
-          style: hasProblem ? TextStyle(color: theme.colorScheme.error) : null,
-        ),
-        trailing: line.looking
-            ? null
-            : hasProblem
-                ? IconButton(
-                    tooltip: 'Kalemi sil',
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () => _remove(line),
-                  )
-                : Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: '1 azalt',
-                        icon: const Icon(Icons.remove_circle_outline),
-                        onPressed: () => _change(line, -1),
-                      ),
-                      // Dokunulabilir olduğu belli olsun diye çerçeveli; 48 dp dokunma alanı.
-                      Tooltip(
-                        message: 'Miktarı düzenle',
-                        child: OutlinedButton(
-                          onPressed: () => _editQuantity(line),
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size(56, 48),
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                          ),
-                          child: Text(
-                            '${formatQty(line.quantity)} ${p?.unit ?? ''}',
-                            style: theme.textTheme.titleMedium,
+                  ? IconButton(
+                      tooltip: 'Kalemi sil',
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () => _remove(line),
+                    )
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: '1 azalt',
+                          icon: const Icon(Icons.remove_circle_outline),
+                          onPressed: () => _change(line, -1),
+                        ),
+                        // Dokunulabilir olduğu belli olsun diye çerçeveli; 48 dp dokunma alanı.
+                        Tooltip(
+                          message: 'Miktarı düzenle',
+                          child: OutlinedButton(
+                            onPressed: () => _editQuantity(line),
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(56, 48),
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                            ),
+                            child: Text(
+                              '${formatQty(line.quantity)} ${p?.unit ?? ''}',
+                              style: theme.textTheme.titleMedium,
+                            ),
                           ),
                         ),
-                      ),
-                      IconButton(
-                        tooltip: '1 artır',
-                        icon: const Icon(Icons.add_circle_outline),
-                        onPressed: () => _change(line, 1),
-                      ),
-                    ],
-                  ),
+                        IconButton(
+                          tooltip: '1 artır',
+                          icon: const Icon(Icons.add_circle_outline),
+                          onPressed: () => _change(line, 1),
+                        ),
+                      ],
+                    ),
+        ),
       ),
     );
   }

@@ -9,6 +9,7 @@ import '../api/api_client.dart';
 import '../main.dart';
 import '../models.dart';
 import '../offline/offline_store.dart';
+import '../theme.dart';
 import 'add_product_page.dart';
 import 'batch_scan_page.dart';
 import 'dashboard_tab.dart';
@@ -17,6 +18,8 @@ import 'pending_page.dart';
 import 'product_page.dart';
 import 'products_tab.dart';
 import 'scan_page.dart';
+
+enum _MenuAction { batchCount, batchIn, batchOut, logout }
 
 /// Uygulamanın kabuğu: alt menü (Özet / Ürünler / Hareketler), barkod okutma düğmesi,
 /// raporlar, çevrimdışı şeridi ve bekleyen kayıtların arka planda gönderimi.
@@ -84,19 +87,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   // --- Ürün açma ---
 
-  Future<void> _openProduct(Product product) async {
-    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ProductPage(product: product)));
+  /// [fromScan]: barkod okutularak açıldı; miktar alanı odaklanır.
+  /// Ürün ekranı "Kaydet ve sıradakini okut" ile kapanırsa tarama yeniden açılır.
+  Future<void> _openProduct(Product product, {bool fromScan = false}) async {
+    final scanNext = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => ProductPage(product: product, autofocusQuantity: fromScan)),
+    );
     if (!mounted) return;
     _reloadAll(); // stok değişmiş olabilir
     _trySync();
+    if (scanNext == true) await _scan();
   }
 
   /// Barkoddan ürünü bulup açar. Çevrimdışıysa son bilinen listeden.
-  Future<void> _openByBarcode(String barcode) async {
+  /// [fromScan]: barkod kamerayla/elle okutuldu (listeden dokunulmadı).
+  Future<void> _openByBarcode(String barcode, {bool fromScan = false}) async {
     try {
       final product = await _api.getProductByBarcode(barcode);
       if (!mounted) return;
-      await _openProduct(product);
+      await _openProduct(product, fromScan: fromScan);
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.isUnauthorized) return handleUnauthorized(context);
@@ -104,7 +113,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (e.isNetworkError) {
         _offline.setOffline(true);
         final cached = _offline.findCached(barcode);
-        if (cached != null) return _openProduct(cached);
+        if (cached != null) return _openProduct(cached, fromScan: fromScan);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Çevrimdışısın ve $barcode cihazdaki listede yok.'),
         ));
@@ -127,7 +136,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       MaterialPageRoute(builder: (_) => const ScanPage()),
     );
     if (barcode == null || !mounted) return;
-    await _openByBarcode(barcode);
+    await _openByBarcode(barcode, fromScan: true);
   }
 
   /// Barkod sistemde yok: yönetici ise ürün eklemeyi önerir.
@@ -157,7 +166,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       MaterialPageRoute(builder: (_) => AddProductPage(barcode: barcode)),
     );
     if (product == null || !mounted) return;
-    await _openProduct(product);
+    await _openProduct(product, fromScan: true);
   }
 
   // --- Raporlar ---
@@ -288,24 +297,46 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       appBar: AppBar(
         title: Text(_titles[_tab]),
         actions: [
-          PopupMenuButton<MovementType>(
-            tooltip: 'Seri işlem',
-            icon: const Icon(Icons.playlist_add_check),
-            onSelected: _startBatch,
-            itemBuilder: (_) => [
-              for (final mode in const [MovementType.count, MovementType.inbound, MovementType.outbound])
-                PopupMenuItem(value: mode, child: Text(BatchScanPage.titleFor(mode))),
-            ],
-          ),
           IconButton(
             tooltip: 'Excel raporu',
             icon: const Icon(Icons.file_download_outlined),
             onPressed: _showReports,
           ),
-          IconButton(
-            tooltip: 'Çıkış',
-            icon: const Icon(Icons.logout),
-            onPressed: _logout,
+          // Seri işlemler (Özet ekranında da var; özet yüklenemezse buradan ulaşılır) ve oturumu kapatma.
+          // Çıkış, rapor ikonunun yanında durup yanlışlıkla basılmasın diye menüde.
+          PopupMenuButton<_MenuAction>(
+            tooltip: 'Diğer',
+            onSelected: (action) => switch (action) {
+              _MenuAction.batchCount => _startBatch(MovementType.count),
+              _MenuAction.batchIn => _startBatch(MovementType.inbound),
+              _MenuAction.batchOut => _startBatch(MovementType.outbound),
+              _MenuAction.logout => _logout(),
+            },
+            itemBuilder: (_) => [
+              for (final (action, mode) in const [
+                (_MenuAction.batchCount, MovementType.count),
+                (_MenuAction.batchIn, MovementType.inbound),
+                (_MenuAction.batchOut, MovementType.outbound),
+              ])
+                PopupMenuItem(
+                  value: action,
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: MovementIcon(mode),
+                    title: Text(BatchScanPage.titleFor(mode)),
+                  ),
+                ),
+              const PopupMenuDivider(),
+              PopupMenuItem(
+                value: _MenuAction.logout,
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.logout),
+                  title: const Text('Çıkış yap'),
+                  subtitle: _api.session == null ? null : Text(_api.session!.fullName),
+                ),
+              ),
+            ],
           ),
         ],
       ),

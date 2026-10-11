@@ -8,10 +8,15 @@ import '../offline/offline_store.dart';
 import '../theme.dart';
 import 'edit_product_page.dart';
 
+/// Ürün ekranı: stok, giriş/çıkış/sayım kaydı, son hareketler.
+/// "Kaydet ve sıradakini okut" ile kaydedilirse `true` döndürür; çağıran taramayı yeniden açar.
 class ProductPage extends StatefulWidget {
-  const ProductPage({super.key, required this.product});
+  const ProductPage({super.key, required this.product, this.autofocusQuantity = false});
 
   final Product product;
+
+  /// Barkod okutularak açıldıysa miktar alanı odaklanır (bir dokunuş daha az).
+  final bool autofocusQuantity;
 
   @override
   State<ProductPage> createState() => _ProductPageState();
@@ -47,8 +52,12 @@ class _ProductPageState extends State<ProductPage> {
   @override
   void initState() {
     super.initState();
+    _quantity.addListener(_onQuantityChanged);
     _loadMovements();
   }
+
+  // Kaydet etiketi, stok uyarısı ve sayım farkı girilen miktara göre güncellenir.
+  void _onQuantityChanged() => setState(() {});
 
   @override
   void dispose() {
@@ -72,12 +81,13 @@ class _ProductPageState extends State<ProductPage> {
   /// Hızlı miktar düğmeleri: mevcut değerin üstüne ekler.
   void _addToQuantity(double step) {
     final current = _parseQuantity() ?? 0;
-    setState(() => _quantity.text = formatQtyInput(current + step));
+    _quantity.text = formatQtyInput(current + step);
   }
 
   double? _parseQuantity() => double.tryParse(_quantity.text.trim().replaceAll(',', '.'));
 
-  Future<void> _save() async {
+  /// [scanNext]: kayıt (çevrimiçi ya da kuyruğa) başarılıysa ekranı kapatıp sıradaki barkodu okut.
+  Future<void> _save({bool scanNext = false}) async {
     final quantity = _parseQuantity();
     final messenger = ScaffoldMessenger.of(context);
     if (quantity == null || quantity < 0 || (quantity == 0 && _type != MovementType.count)) {
@@ -105,11 +115,19 @@ class _ProductPageState extends State<ProductPage> {
       messenger.showSnackBar(SnackBar(
         content: Text('${_type.label} kaydedildi. Yeni stok: ${formatQty(_stock)} ${_product.unit}'),
       ));
+      if (scanNext) {
+        Navigator.of(context).pop(true);
+        return;
+      }
       _loadMovements();
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.isUnauthorized) return handleUnauthorized(context);
-      if (e.isNetworkError) return _saveOffline(quantity, messenger);
+      if (e.isNetworkError) {
+        await _saveOffline(quantity, messenger);
+        if (scanNext && mounted) Navigator.of(context).pop(true);
+        return;
+      }
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -180,113 +198,179 @@ class _ProductPageState extends State<ProductPage> {
             ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      // Kaydet düğmeleri listenin dışında, altta sabit: klavye açıkken de görünür kalır.
+      body: Column(
         children: [
-          Text(p.name, style: theme.textTheme.titleLarge),
-          const SizedBox(height: 4),
-          Text(
-            p.categoryName == null ? p.barcode : '${p.barcode} · ${p.categoryName}',
-            style: theme.textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 16),
-          Card(
-            color: _isCritical ? theme.colorScheme.errorContainer : null,
-            child: Padding(
+          Expanded(
+            child: ListView(
               padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Text('Mevcut stok', style: theme.textTheme.labelLarge),
-                  const SizedBox(height: 4),
-                  Text('${formatQty(_stock)} ${p.unit}', style: theme.textTheme.displaySmall),
-                  if (_pendingOffline)
-                    Text('Tahmini: gönderilmeyi bekleyen kayıt var', style: theme.textTheme.bodySmall),
-                  if (p.minStock > 0) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      _isCritical
-                          ? 'Kritik seviyede! (sınır ${formatQty(p.minStock)} ${p.unit})'
-                          : 'Kritik seviye: ${formatQty(p.minStock)} ${p.unit}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: _isCritical ? theme.colorScheme.onErrorContainer : null,
-                        fontWeight: _isCritical ? FontWeight.w600 : null,
-                      ),
+              children: [
+                Text(p.name, style: theme.textTheme.titleLarge),
+                const SizedBox(height: 4),
+                Text(
+                  p.categoryName == null ? p.barcode : '${p.barcode} · ${p.categoryName}',
+                  style: theme.textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 16),
+                _buildStockCard(theme),
+                const SizedBox(height: 24),
+                SegmentedButton<MovementType>(
+                  segments: [
+                    for (final t in MovementType.values)
+                      ButtonSegment(value: t, icon: Icon(movementIconData(t)), label: Text(t.label)),
+                  ],
+                  selected: {_type},
+                  showSelectedIcon: false,
+                  style: SegmentedButton.styleFrom(
+                    selectedBackgroundColor: colors.colorFor(_type),
+                    selectedForegroundColor: colors.onColorFor(_type),
+                  ),
+                  onSelectionChanged: (s) => setState(() {
+                    _type = _lastType = s.first;
+                    _requestId = _uuid.v4(); // farklı işlem = farklı istek
+                  }),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _quantity,
+                  autofocus: widget.autofocusQuantity,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: _type == MovementType.count ? 'Sayılan miktar (${p.unit})' : 'Miktar (${p.unit})',
+                    border: const OutlineInputBorder(),
+                    errorText: _stockWarning(p.unit),
+                    errorMaxLines: 3,
+                    helperText: _countDiffHint(p.unit),
+                    helperMaxLines: 3,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final step in const [1, 5, 10, 50])
+                      ActionChip(label: Text('+$step'), onPressed: () => _addToQuantity(step.toDouble())),
+                    ActionChip(
+                      avatar: const Icon(Icons.backspace_outlined, size: 16),
+                      label: const Text('Temizle'),
+                      onPressed: _quantity.clear,
                     ),
                   ],
-                ],
-              ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _note,
+                  decoration: const InputDecoration(labelText: 'Not (isteğe bağlı)', border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 32),
+                Text('Son hareketler', style: theme.textTheme.titleMedium),
+                const SizedBox(height: 8),
+                ..._buildMovements(theme),
+              ],
             ),
           ),
-          const SizedBox(height: 24),
-          SegmentedButton<MovementType>(
-            segments: [
-              for (final t in MovementType.values)
-                ButtonSegment(value: t, icon: Icon(movementIconData(t)), label: Text(t.label)),
-            ],
-            selected: {_type},
-            showSelectedIcon: false,
-            style: SegmentedButton.styleFrom(
-              selectedBackgroundColor: colors.colorFor(_type),
-              selectedForegroundColor: colors.onColorFor(_type),
-            ),
-            onSelectionChanged: (s) => setState(() {
-              _type = _lastType = s.first;
-              _requestId = _uuid.v4(); // farklı işlem = farklı istek
-            }),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _quantity,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(
-              labelText: _type == MovementType.count ? 'Sayılan miktar (${p.unit})' : 'Miktar (${p.unit})',
-              border: const OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            children: [
-              for (final step in const [1, 5, 10, 50])
-                ActionChip(label: Text('+$step'), onPressed: () => _addToQuantity(step.toDouble())),
-              ActionChip(
-                avatar: const Icon(Icons.backspace_outlined, size: 16),
-                label: const Text('Temizle'),
-                onPressed: () => setState(_quantity.clear),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _note,
-            decoration: const InputDecoration(labelText: 'Not (isteğe bağlı)', border: OutlineInputBorder()),
-          ),
-          const SizedBox(height: 20),
-          // Düğme hangi işlemin kaydedileceğini rengi ve metniyle söyler; yanlış tipte kayıt riskini azaltır.
-          ValueListenableBuilder(
-            valueListenable: _quantity,
-            builder: (context, _, __) => FilledButton.icon(
-              onPressed: _saving ? null : _save,
-              style: FilledButton.styleFrom(
-                backgroundColor: colors.colorFor(_type),
-                foregroundColor: colors.onColorFor(_type),
-              ),
-              icon: _saving
-                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                  : Icon(movementIconData(_type)),
-              label: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Text(_saveLabel(p.unit)),
-              ),
-            ),
-          ),
-          const SizedBox(height: 32),
-          Text('Son hareketler', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          ..._buildMovements(theme),
+          _buildSaveBar(theme, colors, p.unit),
         ],
       ),
     );
+  }
+
+  Widget _buildStockCard(ThemeData theme) {
+    final p = _product;
+    return Card(
+      color: _isCritical ? theme.colorScheme.errorContainer : null,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Text('Mevcut stok', style: theme.textTheme.labelLarge),
+            const SizedBox(height: 4),
+            Text('${formatQty(_stock)} ${p.unit}', style: theme.textTheme.displaySmall, textAlign: TextAlign.center),
+            if (_pendingOffline)
+              Text('Tahmini: gönderilmeyi bekleyen kayıt var', style: theme.textTheme.bodySmall),
+            if (p.minStock > 0) ...[
+              const SizedBox(height: 4),
+              Text(
+                _isCritical
+                    ? 'Kritik seviyede! (sınır ${formatQty(p.minStock)} ${p.unit})'
+                    : 'Kritik seviye: ${formatQty(p.minStock)} ${p.unit}',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: _isCritical ? theme.colorScheme.onErrorContainer : null,
+                  fontWeight: _isCritical ? FontWeight.w600 : null,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Altta sabit kaydetme alanı. Düğme hangi işlemin kaydedileceğini rengi ve metniyle söyler;
+  /// yanlış tipte kayıt riskini azaltır.
+  /// Büyük yazı boyutunda çubuk ekranın üçte birini kaplamasın diye yazı ölçeği 1.3'te sınırlanır
+  /// (NavigationBar gibi sabit çubuklarda olağan yaklaşım).
+  Widget _buildSaveBar(ThemeData theme, MovementColors colors, String unit) {
+    return MediaQuery.withClampedTextScaling(
+      maxScaleFactor: 1.3,
+      child: _buildSaveBarContent(theme, colors, unit),
+    );
+  }
+
+  Widget _buildSaveBarContent(ThemeData theme, MovementColors colors, String unit) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FilledButton.icon(
+                onPressed: _saving ? null : _save,
+                style: FilledButton.styleFrom(
+                  backgroundColor: colors.colorFor(_type),
+                  foregroundColor: colors.onColorFor(_type),
+                ),
+                icon: _saving
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    : Icon(movementIconData(_type)),
+                label: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(_saveLabel(unit), textAlign: TextAlign.center),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: _saving ? null : () => _save(scanNext: true),
+                icon: const Icon(Icons.qr_code_scanner),
+                label: const Text('Kaydet ve sıradakini okut'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Çıkış stoktan fazlaysa uyarır. Engellemez: gösterilen stok eski olabilir, son karar sunucunun.
+  String? _stockWarning(String unit) {
+    final qty = _parseQuantity();
+    if (_type != MovementType.outbound || qty == null || qty <= _stock) return null;
+    return 'Stokta ${formatQty(_stock)} $unit görünüyor; fazlası reddedilir.';
+  }
+
+  /// Sayımda yazılacak farkı önceden gösterir: "Sistemde 10 Adet · fark -2".
+  String? _countDiffHint(String unit) {
+    final qty = _parseQuantity();
+    if (_type != MovementType.count || qty == null) return null;
+    final diff = qty - _stock;
+    final diffText = diff > 0 ? '+${formatQty(diff)}' : formatQty(diff);
+    return 'Sistemde ${formatQty(_stock)} $unit · fark $diffText';
   }
 
   List<Widget> _buildMovements(ThemeData theme) {
