@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Aynı PR'a yeni push gelince eski çalışma iptal edilir.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mobile:
+    name: Mobile (Flutter analyze + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      # Yereldeki sürümle aynı tutulur; yükseltirken burayı da güncelle.
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.7
+          cache: true
+
+      # pubspec.lock ile uyuşmazlık varsa sessizce güncellemek yerine hata verir.
+      - run: flutter pub get --enforce-lockfile
+
+      - run: flutter analyze
+
+      # CI=true iken yazı boyutu testleri Roboto bulunamazsa atlanmaz, kırmızı olur.
+      - run: flutter test
+
+  backend:
+    name: Backend (.NET build + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - run: dotnet restore StokTakip.slnx
+
+      - run: dotnet build StokTakip.slnx --no-restore --configuration Release
+
+      # Entegrasyon testleri Testcontainers ile gerçek bir SQL Server container'ı başlatır;
+      # ubuntu-latest runner'da Docker hazır gelir.
+      - run: dotnet test StokTakip.slnx --no-build --configuration Release --logger "console;verbosity=normal"
