@@ -8,8 +8,10 @@ public class StockInsightsTests
     private static readonly DateTime Now = new(2026, 10, 11, 12, 0, 0, DateTimeKind.Utc);
     private static readonly InsightOptions Options = new();
 
+    /// <summary>Son <paramref name="days"/> günün her birinde bir çıkış: 1 saat önce, 1 gün 1 saat önce, ...
+    /// Hepsi pencerenin içinde kalır (en eskisi Now − (days−1) gün − 1 saat).</summary>
     private static List<OutPoint> DailyOuts(int days, decimal perDay) =>
-        Enumerable.Range(1, days).Select(d => new OutPoint(Now.AddDays(-d).AddHours(-1), perDay)).ToList();
+        Enumerable.Range(0, days).Select(d => new OutPoint(Now.AddDays(-d).AddHours(-1), perDay)).ToList();
 
     [Fact]
     public void No_outs_means_no_forecast()

@@ -77,12 +77,12 @@ public static class DbInitializer
         await db.SaveChangesAsync();
         logger.LogInformation("Demo verisi yüklendi: 2 kullanıcı, {Count} ürün", products.Length);
 
-        // Tahmin ve anomali ekranları boş görünmesin diye 60 günlük geçmiş (anlık stok değişmez).
+        // Tahmin, anomali ve ML talep tahmini ekranları boş görünmesin diye 120 günlük SENTETİK geçmiş (anlık stok değişmez).
         // Kapatmak için: "Demo": { "GenerateHistory": false }
         var config = scope.ServiceProvider.GetRequiredService<IConfiguration>();
         if (config.GetValue("Demo:GenerateHistory", true))
         {
-            var count = await Services.DemoHistory.GenerateAsync(db, admin.Id, 60);
+            var count = await Services.DemoHistory.GenerateAsync(db, admin.Id, 120);
             logger.LogInformation("Demo geçmişi eklendi: {Count} hareket", count);
         }
     }

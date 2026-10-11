@@ -354,6 +354,146 @@ class Insights {
       );
 }
 
+/// ML.NET talep modelinin durumu ve test başarısı (GET /api/ml/demand-model).
+class DemandModelInfo {
+  final bool trained;
+  final String? reason;
+  final String algorithm;
+  final DateTime? trainedAt;
+  final int trainingRows;
+  final int productCount;
+  final int historyDays;
+  final double confidenceLevel;
+  final bool calibrated;
+
+  /// Son 14 günde (eğitimde görülmemiş) günlük ortalama mutlak hata.
+  final double? testMae;
+
+  /// Aynı dönemde "son 28 gün ortalaması" tahmininin hatası.
+  final double? baselineMae;
+
+  /// Günlük aralığın test döneminde gerçek değeri kapsama oranı (0-1).
+  final double? dailyCoverage;
+  final int? totalHits;
+  final int? totalCount;
+
+  /// Eğitim verisinde sentetik demo geçmişi var.
+  final bool usesDemoData;
+
+  const DemandModelInfo({
+    required this.trained,
+    required this.reason,
+    required this.algorithm,
+    required this.trainedAt,
+    required this.trainingRows,
+    required this.productCount,
+    required this.historyDays,
+    required this.confidenceLevel,
+    required this.calibrated,
+    required this.testMae,
+    required this.baselineMae,
+    required this.dailyCoverage,
+    required this.totalHits,
+    required this.totalCount,
+    required this.usesDemoData,
+  });
+
+  /// Model, basit ortalamaya göre hatayı ne oranda azaltıyor (0,35 = %35). Negatifse daha kötü.
+  double? get improvement {
+    final m = testMae, b = baselineMae;
+    if (m == null || b == null || b <= 0) return null;
+    return 1 - m / b;
+  }
+
+  factory DemandModelInfo.fromJson(Map<String, dynamic> json) => DemandModelInfo(
+        trained: json['trained'] as bool,
+        reason: json['reason'] as String?,
+        algorithm: json['algorithm'] as String,
+        trainedAt: json['trainedAtUtc'] == null ? null : Movement._parseUtc(json['trainedAtUtc'] as String),
+        trainingRows: json['trainingRows'] as int,
+        productCount: json['productCount'] as int,
+        historyDays: json['historyDays'] as int,
+        confidenceLevel: (json['confidenceLevel'] as num).toDouble(),
+        calibrated: json['calibrated'] as bool,
+        testMae: (json['testMae'] as num?)?.toDouble(),
+        baselineMae: (json['baselineMae'] as num?)?.toDouble(),
+        dailyCoverage: (json['dailyCoverage'] as num?)?.toDouble(),
+        totalHits: json['totalHits'] as int?,
+        totalCount: json['totalCount'] as int?,
+        usesDemoData: json['usesDemoData'] as bool? ?? false,
+      );
+}
+
+/// Grafikteki gerçek günlük çıkış.
+class DemandDay {
+  final DateTime date;
+  final double quantity;
+
+  const DemandDay(this.date, this.quantity);
+
+  factory DemandDay.fromJson(Map<String, dynamic> json) =>
+      DemandDay(DateTime.parse(json['date'] as String), (json['quantity'] as num).toDouble());
+}
+
+/// Tahmin edilen günlük çıkış ve %90 aralığı.
+class DemandForecastDay {
+  final DateTime date;
+  final double forecast;
+  final double lower;
+  final double upper;
+
+  const DemandForecastDay(this.date, this.forecast, this.lower, this.upper);
+
+  factory DemandForecastDay.fromJson(Map<String, dynamic> json) => DemandForecastDay(
+        DateTime.parse(json['date'] as String),
+        (json['forecast'] as num).toDouble(),
+        (json['lower'] as num).toDouble(),
+        (json['upper'] as num).toDouble(),
+      );
+}
+
+/// GET /api/products/{id}/demand-forecast
+class DemandForecast {
+  final bool available;
+  final String? reason;
+  final List<DemandDay> history;
+  final List<DemandForecastDay> forecast;
+  final double total;
+  final double totalLower;
+  final double totalUpper;
+  final DateTime? stockoutDate;
+  final DemandModelInfo model;
+
+  const DemandForecast({
+    required this.available,
+    required this.reason,
+    required this.history,
+    required this.forecast,
+    required this.total,
+    required this.totalLower,
+    required this.totalUpper,
+    required this.stockoutDate,
+    required this.model,
+  });
+
+  factory DemandForecast.fromJson(Map<String, dynamic> json) => DemandForecast(
+        available: json['available'] as bool,
+        reason: json['reason'] as String?,
+        history: (json['history'] as List<dynamic>)
+            .map((e) => DemandDay.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        forecast: (json['forecast'] as List<dynamic>)
+            .map((e) => DemandForecastDay.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        total: (json['total'] as num).toDouble(),
+        totalLower: (json['totalLower'] as num).toDouble(),
+        totalUpper: (json['totalUpper'] as num).toDouble(),
+        // DateOnly: "2026-10-16" → yerel gün
+        stockoutDate: json['stockoutDate'] == null ? null : DateTime.parse(json['stockoutDate'] as String),
+        model: DemandModelInfo.fromJson(json['model'] as Map<String, dynamic>),
+      );
+}
+
 /// "~5 gün", "1 günden az", "tükendi".
 String formatDaysLeft(double days) {
   if (days <= 0) return 'tükendi';

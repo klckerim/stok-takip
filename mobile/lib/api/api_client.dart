@@ -132,6 +132,12 @@ class ApiClient {
     return ProductForecast.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
+  /// ML.NET talep tahmini: son 28 günün gerçek çıkışları, önümüzdeki 14 günün tahmini ve %90 aralığı.
+  Future<DemandForecast> getDemandForecast(int productId) async {
+    final res = await _send(() => http.get(_uri('/api/products/$productId/demand-forecast'), headers: _headers));
+    return DemandForecast.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
   /// Tüm depo hareketleri. [type] null = hepsi; [days] 1 = bugün.
   Future<List<MovementListItem>> getAllMovements({MovementType? type, int days = 7, int take = 100}) async {
     final query = <String, String>{

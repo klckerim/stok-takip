@@ -16,9 +16,7 @@ namespace StokTakip.Api.Tests;
 /// </summary>
 public class ApiFixture : IAsyncLifetime
 {
-    private readonly MsSqlContainer _db = new MsSqlBuilder()
-        .WithImage("mcr.microsoft.com/mssql/server:2022-latest")
-        .Build();
+    private readonly MsSqlContainer _db = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
 
     public WebApplicationFactory<Program> Factory { get; private set; } = null!;
 
@@ -268,6 +266,38 @@ public class ApiTests(ApiFixture fixture) : IClassFixture<ApiFixture>
         Assert.True(f!.AvgDailyOut > 0);
         Assert.NotNull(f.DaysLeft);
         Assert.True(f.SuggestedMinStock > 0);
+    }
+
+    [Fact]
+    public async Task Demand_forecast_uses_trained_ml_model()
+    {
+        var client = await LoggedInClient();
+        var product = await GetByBarcode(client, KoliBarcode);
+
+        var f = await client.GetFromJsonAsync<DemandForecastDto>($"/api/products/{product.Id}/demand-forecast", Json);
+
+        Assert.NotNull(f);
+        Assert.True(f!.Available, f.Reason);
+        Assert.True(f.Model.Trained);
+        Assert.NotNull(f.Model.TestMae);
+        Assert.Equal(14, f.Forecast.Count);
+        Assert.NotEmpty(f.History);
+        Assert.All(f.Forecast, p => Assert.True(p.Lower <= p.Forecast && p.Forecast <= p.Upper));
+        Assert.True(f.TotalLower <= f.Total && f.Total <= f.TotalUpper);
+    }
+
+    [Fact]
+    public async Task Only_admin_can_retrain_demand_model()
+    {
+        var depo = await LoggedInClient();
+        Assert.Equal(HttpStatusCode.Forbidden, (await depo.PostAsync("/api/ml/demand-model/train", null)).StatusCode);
+
+        var admin = await LoggedInClient("admin", "Admin123!");
+        var res = await admin.PostAsync("/api/ml/demand-model/train", null);
+        res.EnsureSuccessStatusCode();
+        var info = await res.Content.ReadFromJsonAsync<DemandModelInfoDto>(Json);
+        Assert.True(info!.Trained, info.Reason);
+        Assert.True(info.TrainingRows > 0);
     }
 
     [Fact]

@@ -6,12 +6,13 @@ import '../main.dart';
 import '../models.dart';
 import '../offline/offline_store.dart';
 import '../theme.dart';
+import '../widgets/demand_chart.dart';
 import 'edit_product_page.dart';
 
-/// Ürün ekranı: stok, tüketim tahmini, giriş/çıkış/sayım kaydı, son hareketler.
+/// Ürün ekranı: stok, tüketim tahmini, ML talep tahmini, giriş/çıkış/sayım kaydı, son hareketler.
 /// "Kaydet ve sıradakini okut" ile kaydedilirse `true` döndürür; çağıran taramayı yeniden açar.
 class ProductPage extends StatefulWidget {
-  const ProductPage({super.key, required this.product, this.autofocusQuantity = false, this.forecastLoader});
+  const ProductPage({super.key, required this.product, this.autofocusQuantity = false, this.forecastLoader, this.demandLoader});
 
   final Product product;
 
@@ -20,6 +21,9 @@ class ProductPage extends StatefulWidget {
 
   /// Tahmini getiren fonksiyon; testlerde sahte veri için. Varsayılan: API.
   final Future<ProductForecast> Function(int productId)? forecastLoader;
+
+  /// ML talep tahminini getiren fonksiyon; testlerde sahte veri için. Varsayılan: API.
+  final Future<DemandForecast> Function(int productId)? demandLoader;
 
   @override
   State<ProductPage> createState() => _ProductPageState();
@@ -50,6 +54,9 @@ class _ProductPageState extends State<ProductPage> {
   ProductForecast? _forecast;
   bool _applyingMinStock = false;
 
+  /// ML.NET talep tahmini. Yüklenemezse (çevrimdışı, eski sunucu) null: kart görünmez.
+  DemandForecast? _demand;
+
   // Aynı kayıt için sabit kalır: ağ hatasından sonra "Kaydet"e tekrar basılırsa
   // sunucu hareketi iki kez yazmaz. Başarılı kayıttan sonra yenilenir.
   String _requestId = _uuid.v4();
@@ -62,6 +69,7 @@ class _ProductPageState extends State<ProductPage> {
     _quantity.addListener(_onQuantityChanged);
     _loadMovements();
     _loadForecast();
+    _loadDemand();
   }
 
   // Kaydet etiketi, stok uyarısı ve sayım farkı girilen miktara göre güncellenir.
@@ -90,6 +98,15 @@ class _ProductPageState extends State<ProductPage> {
     try {
       final f = await (widget.forecastLoader ?? _api.getProductForecast)(_product.id);
       if (mounted) setState(() => _forecast = f);
+    } catch (_) {
+      // Ek bilgi; yüklenemezse kart gizli kalır.
+    }
+  }
+
+  Future<void> _loadDemand() async {
+    try {
+      final d = await (widget.demandLoader ?? _api.getDemandForecast)(_product.id);
+      if (mounted) setState(() => _demand = d);
     } catch (_) {
       // Ek bilgi; yüklenemezse kart gizli kalır.
     }
@@ -164,6 +181,7 @@ class _ProductPageState extends State<ProductPage> {
       }
       _loadMovements();
       _loadForecast();
+      _loadDemand();
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.isUnauthorized) return handleUnauthorized(context);
@@ -258,10 +276,6 @@ class _ProductPageState extends State<ProductPage> {
                 ),
                 const SizedBox(height: 16),
                 _buildStockCard(theme),
-                if (_forecast != null) ...[
-                  const SizedBox(height: 8),
-                  _buildForecastCard(theme, _forecast!, isAdmin),
-                ],
                 const SizedBox(height: 24),
                 SegmentedButton<MovementType>(
                   segments: [
@@ -311,6 +325,15 @@ class _ProductPageState extends State<ProductPage> {
                   controller: _note,
                   decoration: const InputDecoration(labelText: 'Not (isteğe bağlı)', border: OutlineInputBorder()),
                 ),
+                // Analiz kartları formun altında: ekranın asıl işi kayıt girmek, önce o görünür.
+                if (_forecast != null) ...[
+                  const SizedBox(height: 24),
+                  _buildForecastCard(theme, _forecast!, isAdmin),
+                ],
+                if (_demand != null) ...[
+                  const SizedBox(height: 8),
+                  _buildDemandCard(theme, _demand!),
+                ],
                 const SizedBox(height: 32),
                 Text('Son hareketler', style: theme.textTheme.titleMedium),
                 const SizedBox(height: 8),
@@ -420,6 +443,87 @@ class _ProductPageState extends State<ProductPage> {
         ),
       ),
     );
+  }
+
+  /// ML.NET talep tahmini: 14 günlük toplam ve aralık, grafik, modelin test başarısı.
+  /// Modelin ne kadar iyi olduğu (ya da olmadığı) açıkça yazılır; sentetik veriyle eğitildiyse belirtilir.
+  Widget _buildDemandCard(ThemeData theme, DemandForecast d) {
+    final unit = _product.unit;
+    final muted = theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final m = d.model;
+    final level = (m.confidenceLevel * 100).round();
+    final stockout = d.stockoutDate;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.auto_graph, size: 20, color: theme.colorScheme.primary),
+              const SizedBox(width: 8),
+              Expanded(child: Text('Talep tahmini · ML', style: theme.textTheme.titleSmall)),
+            ]),
+            const SizedBox(height: 8),
+            if (!d.available)
+              Text(d.reason ?? 'Tahmin yapılamadı.', style: muted)
+            else ...[
+              Text(
+                'Önümüzdeki ${d.forecast.length} gün: ~${formatQty(d.total.roundToDouble())} $unit çıkış',
+                style: theme.textTheme.titleMedium,
+              ),
+              Text(
+                '%$level aralık: ${formatQty(d.totalLower.roundToDouble())} – ${formatQty(d.totalUpper.roundToDouble())} $unit',
+                style: muted,
+              ),
+              if (stockout != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Bu talep hızıyla stok ${formatDate(stockout)} civarı biter.',
+                  style: TextStyle(color: theme.colorScheme.error, fontWeight: FontWeight.w600),
+                ),
+              ],
+              const SizedBox(height: 12),
+              DemandChart(history: d.history, forecast: d.forecast),
+              const SizedBox(height: 12),
+              Text(_modelSummary(m), style: muted),
+              if ((m.improvement ?? 0) < 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Test döneminde basit ortalama daha isabetliydi; bu tahmini temkinli kullan.',
+                    style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error),
+                  ),
+                ),
+              if (m.usesDemoData)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('Not: Model demo için üretilmiş sentetik geçmişle eğitildi.', style: muted),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// "Poisson regresyon (ML.NET) · 120 günlük geçmiş, 9.800 örnek. Son 14 günlük testte günlük hata 12,9
+  /// (basit ortalama 19,9; %35 daha iyi). Aralığın testteki kapsaması: %82 (hedef %90)."
+  String _modelSummary(DemandModelInfo m) {
+    final parts = <String>[
+      'Poisson regresyon (ML.NET) · ${m.historyDays} günlük geçmiş, ${formatQty(m.trainingRows.toDouble())} örnek.',
+    ];
+    final mae = m.testMae, base = m.baselineMae, imp = m.improvement;
+    if (mae != null && base != null && imp != null) {
+      final cmp = imp >= 0 ? '%${(imp * 100).round()} daha iyi' : '%${(-imp * 100).round()} daha kötü';
+      parts.add('Son 14 günlük testte günlük hata ${formatRate(mae)} (basit ortalama ${formatRate(base)}; $cmp).');
+    }
+    final cov = m.dailyCoverage;
+    if (cov != null) {
+      parts.add('Aralığın testteki kapsaması: %${(cov * 100).round()} (hedef %${(m.confidenceLevel * 100).round()}).');
+    }
+    return parts.join(' ');
   }
 
   /// Altta sabit kaydetme alanı. Düğme hangi işlemin kaydedileceğini rengi ve metniyle söyler;

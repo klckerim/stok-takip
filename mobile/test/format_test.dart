@@ -110,4 +110,68 @@ void main() {
     expect(i.anomalies.single.type, MovementType.outbound);
     expect(i.anomalies.single.reason, contains('6 katı'));
   });
+
+  test('DemandForecast API cevabını okur', () {
+    final d = DemandForecast.fromJson({
+      'available': true,
+      'reason': null,
+      'history': [
+        {'date': '2026-10-10', 'quantity': 12},
+      ],
+      'forecast': [
+        {'date': '2026-10-11', 'forecast': 0.4, 'lower': 0, 'upper': 2.1},
+        {'date': '2026-10-12', 'forecast': 14.2, 'lower': 6.3, 'upper': 22.1},
+      ],
+      'total': 14.6,
+      'totalLower': 6,
+      'totalUpper': 23.2,
+      'stockoutDate': '2026-10-12',
+      'model': {
+        'trained': true,
+        'reason': null,
+        'algorithm': 'ML.NET LbfgsPoissonRegression',
+        'trainedAtUtc': '2026-10-11T10:00:00Z',
+        'trainingMs': 850,
+        'trainingRows': 9800,
+        'productCount': 10,
+        'historyDays': 120,
+        'confidenceLevel': 0.9,
+        'calibrated': true,
+        'testMae': 12.85,
+        'baselineMae': 19.9,
+        'dailyCoverage': 0.82,
+        'totalHits': 9,
+        'totalCount': 10,
+        'usesDemoData': true,
+      },
+    });
+    expect(d.forecast, hasLength(2));
+    expect(d.forecast[1].date, DateTime(2026, 10, 12)); // DateOnly → yerel gün, saat kayması yok
+    expect(d.stockoutDate, DateTime(2026, 10, 12));
+    expect(d.model.improvement, closeTo(0.354, 0.001));
+    expect(d.model.usesDemoData, isTrue);
+  });
+
+  test('Eğitilmemiş model nedeni okunur', () {
+    final m = DemandModelInfo.fromJson({
+      'trained': false,
+      'reason': 'ML modeli için yeterli geçmiş yok',
+      'algorithm': 'ML.NET LbfgsPoissonRegression',
+      'trainedAtUtc': null,
+      'trainingMs': 0,
+      'trainingRows': 0,
+      'productCount': 0,
+      'historyDays': 0,
+      'confidenceLevel': 0.9,
+      'calibrated': false,
+      'testMae': null,
+      'baselineMae': null,
+      'dailyCoverage': null,
+      'totalHits': null,
+      'totalCount': null,
+    });
+    expect(m.trained, isFalse);
+    expect(m.improvement, isNull);
+    expect(m.usesDemoData, isFalse);
+  });
 }
