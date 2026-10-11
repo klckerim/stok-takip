@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
 import 'api/api_client.dart';
+import 'offline/offline_store.dart';
 import 'pages/home_page.dart';
 import 'pages/login_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await ApiClient.instance.restoreSession();
+  await OfflineStore.instance.load();
   runApp(const StokTakipApp());
 }
 

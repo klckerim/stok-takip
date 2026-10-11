@@ -10,6 +10,7 @@ Depo personeli telefonla ürün barkodunu okutur; giriş, çıkış veya sayım 
 - Kritik stok seviyesi: altına düşen ürün listede kırmızı görünür, "Sadece kritik stok" filtresi
 - Bilinmeyen barkod okutulursa yönetici ürünü telefondan ekler (açılış stoğu ve kritik seviyeyle)
 - Rol bazlı yetki: depo personeli hareket girer, yönetici ürün ekler ve kritik seviyeyi değiştirir
+- Çevrimdışı çalışma: depoda bağlantı yokken giriş/çıkış/sayım telefonda kuyruğa alınır, bağlantı gelince kendiliğinden gönderilir
 - Excel raporları (stok ve son 30 gün hareketleri): telefondan indirip WhatsApp, e-posta veya Dosyalar ile paylaşma
 
 - **Mobil:** Flutter (Android / iOS), kamerayla barkod okuma (`mobile_scanner`)
@@ -28,7 +29,9 @@ backend/  .NET API + testler + docker-compose
 - **Stok tablosu yok, hareket tablosu var.** Anlık stok = hareketlerin toplamı. Her değişikliğin kim tarafından, ne zaman yapıldığı kayıtlı kalır.
 - **Sayım = düzeltme hareketi.** Sayılan miktar girilir; sistem farkı (sayılan − mevcut) hareket olarak yazar.
 - **Eksi stok yok.** Çıkışlar `Serializable` transaction içinde kontrol edilir; aynı anda iki çıkış stoğu eksiye düşüremez.
-- **Idempotency.** Mobil her kayıt için bir `clientRequestId` (GUID) üretir. Zayıf Wi-Fi'de istek tekrar gönderilirse hareket iki kez yazılmaz. İleride offline senkronun da temeli bu.
+- **Idempotency.** Mobil her kayıt için bir `clientRequestId` (GUID) üretir. Zayıf Wi-Fi'de istek tekrar gönderilirse hareket iki kez yazılmaz.
+- **Çevrimdışı kuyruk.** Sunucuya ulaşılamazsa hareket cihazda (SharedPreferences) saklanır; uygulama açılınca, ön plana gelince ve 30 sn'de bir gönderilmeye çalışılır. Aynı `clientRequestId` kullanıldığı için istek aslında sunucuya ulaşmış olsa bile çift kayıt oluşmaz. Hareket, gönderildiği an değil gerçekten yapıldığı an (`occurredAtUtc`) ile kaydedilir. Ürün listesi önbelleğe alındığı için barkod okutma da çevrimdışı çalışır.
+- **Bilinen sınır.** Çevrimdışı sayım, gönderildiği andaki stoğa göre fark yazar; arada başka cihazdan hareket girildiyse sayım onu da düzeltmiş sayılır. Sunucu, stoktan fazla çıkışı gönderim anında reddeder; reddedilen kayıt "Gönderilmeyi bekleyenler" ekranında sebebiyle görünür, tekrar denenebilir ya da silinebilir.
 
 ## 1. Backend'i çalıştır
 
@@ -132,6 +135,5 @@ cd ../.. && docker compose up -d --build
 ## Sonraki adımlar
 
 - [ ] Yönetim paneli (Razor Pages): ürün ve kullanıcı yönetimi
-- [ ] Offline sayım: internet yokken cihazda kuyruğa al, bağlantı gelince gönder
 - [ ] Canlıya alma: VPS + Docker Compose + domain + HTTPS (Caddy veya Nginx), APK indirme linki
 - [ ] README'ye ekran görüntüleri ve 2 dakikalık demo videosu

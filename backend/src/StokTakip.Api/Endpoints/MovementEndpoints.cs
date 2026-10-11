@@ -17,10 +17,14 @@ public static class MovementEndpoints
             .RequireAuthorization();
     }
 
+    /// <summary>Çevrimdışı kaydedilen hareket en fazla bu kadar geriye tarihlenebilir.</summary>
+    private static readonly TimeSpan MaxOfflineAge = TimeSpan.FromDays(30);
+
     /// <summary>
     /// Giriş, çıkış veya sayım kaydı.
     /// - In / Out: Quantity = hareket miktarı (pozitif).
     /// - Count: Quantity = sayılan miktar; stoka etkisi (sayılan - mevcut) olarak yazılır.
+    /// - OccurredAtUtc: Mobil çevrimdışıyken kaydettiyse işlemin gerçek zamanı. Verilmezse şimdi.
     /// </summary>
     private static async Task<IResult> Create(CreateMovementRequest req, AppDbContext db, ClaimsPrincipal user)
     {
@@ -30,6 +34,14 @@ public static class MovementEndpoints
             return Invalid("quantity", "Miktar sıfırdan büyük olmalı.");
         if (req.Type == MovementType.Count && req.Quantity < 0)
             return Invalid("quantity", "Sayılan miktar negatif olamaz.");
+
+        var now = DateTime.UtcNow;
+        var occurredAt = req.OccurredAtUtc is { } t
+            ? (t.Kind == DateTimeKind.Local ? t.ToUniversalTime() : DateTime.SpecifyKind(t, DateTimeKind.Utc))
+            : now;
+        if (occurredAt > now) occurredAt = now; // cihaz saati ileri olabilir
+        if (occurredAt < now - MaxOfflineAge)
+            return Invalid("occurredAtUtc", "Kayıt 30 günden eski; gönderilemez.");
 
         // Aynı istek ikinci kez geldiyse ilk sonucu döndür (idempotency).
         if (req.ClientRequestId is { } requestId)
@@ -54,7 +66,8 @@ public static class MovementEndpoints
             Type = req.Type,
             Note = string.IsNullOrWhiteSpace(req.Note) ? null : req.Note.Trim(),
             UserId = user.UserId(),
-            ClientRequestId = req.ClientRequestId
+            ClientRequestId = req.ClientRequestId,
+            CreatedAtUtc = occurredAt
         };
 
         switch (req.Type)

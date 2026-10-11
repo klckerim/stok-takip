@@ -26,6 +26,16 @@ class Product {
         minStock: (json['minStock'] as num? ?? 0).toDouble(),
         isCritical: json['isCritical'] as bool? ?? false,
       );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'barcode': barcode,
+        'name': name,
+        'unit': unit,
+        'stock': stock,
+        'minStock': minStock,
+        'isCritical': isCritical,
+      };
 }
 
 /// API'deki MovementType ile aynı isimler (JSON'da string olarak gider).

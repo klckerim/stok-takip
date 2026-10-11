@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cross_file/cross_file.dart';
@@ -8,7 +9,9 @@ import 'package:share_plus/share_plus.dart';
 import '../api/api_client.dart';
 import '../main.dart';
 import '../models.dart';
+import '../offline/offline_store.dart';
 import 'add_product_page.dart';
+import 'pending_page.dart';
 import 'product_page.dart';
 import 'scan_page.dart';
 
@@ -19,24 +22,39 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final _api = ApiClient.instance;
+  final _offline = OfflineStore.instance;
   final _search = TextEditingController();
   List<Product> _products = [];
   bool _loading = true;
   bool _criticalOnly = false;
+  bool _isOffline = false;
   String? _error;
+  Timer? _syncTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Bekleyen kayıt varsa 30 sn'de bir göndermeyi dener.
+    _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_offline.waitingCount > 0) _trySync();
+    });
     _load();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _syncTimer?.cancel();
     _search.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _load(); // uygulamaya dönünce tazele ve kuyruğu gönder
   }
 
   Future<void> _load() async {
@@ -44,19 +62,49 @@ class _HomePageState extends State<HomePage> {
       _loading = true;
       _error = null;
     });
+    final search = _search.text.trim();
     try {
-      final items = await _api.getProducts(search: _search.text.trim(), criticalOnly: _criticalOnly);
+      final items = await _api.getProducts(search: search, criticalOnly: _criticalOnly);
       if (!mounted) return;
-      setState(() => _products = items);
+      setState(() {
+        _products = items;
+        _isOffline = false;
+      });
+      if (search.isEmpty && !_criticalOnly) await _offline.cacheProducts(items);
+      await _trySync();
     } on ApiException catch (e) {
-      if (e.isUnauthorized) {
-        if (mounted) await handleUnauthorized(context);
+      if (!mounted) return;
+      if (e.isUnauthorized) return handleUnauthorized(context);
+      if (e.isNetworkError) {
+        setState(() {
+          _isOffline = true;
+          _products = _filterCached(search);
+        });
         return;
       }
-      if (mounted) setState(() => _error = e.message);
+      setState(() => _error = e.message);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// Çevrimdışıyken son bilinen ürün listesinde arama/filtre.
+  List<Product> _filterCached(String search) {
+    final s = search.toLowerCase();
+    return _offline.cachedProducts
+        .where((p) => s.isEmpty || p.name.toLowerCase().contains(s) || p.barcode.contains(s))
+        .where((p) => !_criticalOnly || p.isCritical)
+        .toList();
+  }
+
+  /// Bekleyen kayıtları gönderir; gönderilen olduysa listeyi tazeler.
+  Future<void> _trySync() async {
+    final result = await _offline.sync();
+    if (!mounted || (result.sent == 0 && result.failed == 0)) return;
+    final text = '${result.sent} bekleyen kayıt gönderildi'
+        '${result.failed > 0 ? ', ${result.failed} kayıt reddedildi' : ''}.';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    if (result.sent > 0) _load();
   }
 
   Future<void> _scan() async {
@@ -73,6 +121,15 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) return;
       if (e.isUnauthorized) return handleUnauthorized(context);
       if (e.isNotFound) return _onUnknownBarcode(barcode);
+      if (e.isNetworkError) {
+        // Çevrimdışı: ürünü son bilinen listeden bul, hareket kuyruğa yazılsın.
+        final cached = _offline.findCached(barcode);
+        if (cached != null) return _openProduct(cached);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Çevrimdışısın ve $barcode cihazdaki listede yok.'),
+        ));
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
     }
   }
@@ -170,6 +227,58 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _logout() async {
+    if (_offline.pending.isNotEmpty) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Gönderilmemiş kayıtlar var'),
+          content: Text('${_offline.pending.length} kayıt henüz sunucuya gitmedi. '
+              'Cihazda kalırlar ve bir sonraki girişte gönderilirler. Yine de çıkılsın mı?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Vazgeç')),
+            FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Çıkış yap')),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    await handleUnauthorized(context);
+  }
+
+  Widget _buildStatusBanner() {
+    return ListenableBuilder(
+      listenable: _offline,
+      builder: (context, _) {
+        final theme = Theme.of(context);
+        final waiting = _offline.waitingCount;
+        final failed = _offline.failedCount;
+        if (!_isOffline && waiting == 0 && failed == 0) return const SizedBox.shrink();
+
+        final parts = <String>[
+          if (_isOffline) 'Çevrimdışı: son bilinen stok gösteriliyor',
+          if (waiting > 0) '$waiting kayıt gönderilmeyi bekliyor',
+          if (failed > 0) '$failed kayıt reddedildi',
+        ];
+        return Material(
+          color: failed > 0 ? theme.colorScheme.errorContainer : theme.colorScheme.secondaryContainer,
+          child: ListTile(
+            dense: true,
+            leading: Icon(_isOffline ? Icons.cloud_off : Icons.cloud_upload_outlined),
+            title: Text(parts.join(' · ')),
+            trailing: (waiting + failed) > 0 ? const Icon(Icons.chevron_right) : null,
+            onTap: (waiting + failed) > 0
+                ? () async {
+                    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PendingPage()));
+                    if (mounted) _load();
+                  }
+                : null,
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _openProduct(Product product) async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ProductPage(product: product)));
     if (mounted) _load(); // stok değişmiş olabilir
@@ -192,12 +301,13 @@ class _HomePageState extends State<HomePage> {
           IconButton(
             tooltip: 'Çıkış',
             icon: const Icon(Icons.logout),
-            onPressed: () => handleUnauthorized(context),
+            onPressed: _logout,
           ),
         ],
       ),
       body: Column(
         children: [
+          _buildStatusBanner(),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
             child: TextField(

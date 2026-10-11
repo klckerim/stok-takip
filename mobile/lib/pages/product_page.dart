@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 import '../api/api_client.dart';
 import '../main.dart';
 import '../models.dart';
+import '../offline/offline_store.dart';
 
 class ProductPage extends StatefulWidget {
   const ProductPage({super.key, required this.product});
@@ -24,6 +25,9 @@ class _ProductPageState extends State<ProductPage> {
   late double _stock = widget.product.stock;
   MovementType _type = MovementType.inbound;
   bool _saving = false;
+
+  /// Bu ekranda çevrimdışı kayıt yapıldı; gösterilen stok tahmini.
+  bool _pendingOffline = false;
 
   List<Movement> _movements = [];
   bool _loadingMovements = true;
@@ -93,10 +97,44 @@ class _ProductPageState extends State<ProductPage> {
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.isUnauthorized) return handleUnauthorized(context);
+      if (e.isNetworkError) return _saveOffline(quantity, messenger);
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  /// Sunucuya ulaşılamadı: hareketi cihazdaki kuyruğa yaz, bağlantı gelince gönderilsin.
+  /// Aynı _requestId kullanıldığı için, istek aslında sunucuya ulaşmışsa bile ikinci kez yazılmaz.
+  Future<void> _saveOffline(double quantity, ScaffoldMessengerState messenger) async {
+    await OfflineStore.instance.add(PendingMovement(
+      id: _requestId,
+      productId: _product.id,
+      productName: _product.name,
+      unit: _product.unit,
+      type: _type,
+      quantity: quantity,
+      note: _note.text.trim().isEmpty ? null : _note.text.trim(),
+      createdAt: DateTime.now(),
+    ));
+    if (!mounted) return;
+
+    setState(() {
+      // Tahmini stok; kesin değer gönderim sonrası sunucudan gelir.
+      _stock = switch (_type) {
+        MovementType.inbound => _stock + quantity,
+        MovementType.outbound => _stock - quantity,
+        MovementType.count => quantity,
+      };
+      _pendingOffline = true;
+      _requestId = _uuid.v4();
+      _quantity.clear();
+      _note.clear();
+    });
+    FocusScope.of(context).unfocus();
+    messenger.showSnackBar(const SnackBar(
+      content: Text('Çevrimdışı: kayıt telefonda saklandı, bağlantı gelince gönderilecek.'),
+    ));
   }
 
   /// Sadece yönetici: kritik seviyeyi değiştir.
@@ -174,6 +212,8 @@ class _ProductPageState extends State<ProductPage> {
                   Text('Mevcut stok', style: theme.textTheme.labelLarge),
                   const SizedBox(height: 4),
                   Text('${formatQty(_stock)} ${p.unit}', style: theme.textTheme.displaySmall),
+                  if (_pendingOffline)
+                    Text('Tahmini: gönderilmeyi bekleyen kayıt var', style: theme.textTheme.bodySmall),
                   if (p.minStock > 0) ...[
                     const SizedBox(height: 4),
                     Text(

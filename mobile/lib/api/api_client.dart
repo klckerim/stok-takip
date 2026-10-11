@@ -17,6 +17,9 @@ class ApiException implements Exception {
   bool get isNotFound => statusCode == 404;
   bool get isUnauthorized => statusCode == 401;
 
+  /// Sunucuya hiç ulaşılamadı (ağ yok, zaman aşımı). Sunucu cevap verdiyse false.
+  bool get isNetworkError => statusCode == null;
+
   @override
   String toString() => message;
 }
@@ -71,10 +74,13 @@ class ApiClient {
     return session!;
   }
 
+  /// Sadece oturum bilgisini siler; çevrimdışı kuyruk ve ürün önbelleği cihazda kalır.
   Future<void> logout() async {
     session = null;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
+    await prefs.remove('token');
+    await prefs.remove('fullName');
+    await prefs.remove('role');
   }
 
   Future<List<Product>> getProducts({String? search, bool criticalOnly = false}) async {
@@ -142,6 +148,7 @@ class ApiClient {
     required double quantity,
     String? note,
     String? clientRequestId,
+    DateTime? occurredAt,
   }) async {
     final body = jsonEncode({
       'productId': productId,
@@ -149,6 +156,7 @@ class ApiClient {
       'quantity': quantity,
       'note': note,
       'clientRequestId': clientRequestId ?? _uuid.v4(),
+      if (occurredAt != null) 'occurredAtUtc': occurredAt.toUtc().toIso8601String(),
     });
     final res = await _send(() => http.post(_uri('/api/movements'), headers: _headers, body: body));
     return MovementResult.fromJson(jsonDecode(res.body) as Map<String, dynamic>);

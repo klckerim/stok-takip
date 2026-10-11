@@ -24,7 +24,8 @@ public record CreateMovementRequest(
     MovementType Type,
     decimal Quantity,
     string? Note,
-    Guid? ClientRequestId);
+    Guid? ClientRequestId,
+    DateTime? OccurredAtUtc = null);
 
 public record MovementDto(
     long Id,

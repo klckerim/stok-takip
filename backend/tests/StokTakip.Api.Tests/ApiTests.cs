@@ -161,6 +161,24 @@ public class ApiTests(ApiFixture fixture) : IClassFixture<ApiFixture>
     }
 
     [Fact]
+    public async Task Offline_movement_keeps_its_original_time()
+    {
+        var client = await LoggedInClient();
+        var product = await GetByBarcode(client, "8690000000011");
+        var occurredAt = DateTime.UtcNow.AddHours(-2);
+        var note = $"offline-{Guid.NewGuid():N}";
+
+        var res = await client.PostAsJsonAsync("/api/movements",
+            new CreateMovementRequest(product.Id, MovementType.In, 1, note, Guid.NewGuid(), occurredAt), Json);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+
+        var movements = await client.GetFromJsonAsync<List<MovementDto>>(
+            $"/api/products/{product.Id}/movements?take=100", Json);
+        var saved = movements!.Single(m => m.Note == note);
+        Assert.True(Math.Abs((saved.CreatedAtUtc - occurredAt).TotalSeconds) < 5);
+    }
+
+    [Fact]
     public async Task Stock_report_is_an_excel_file()
     {
         var client = await LoggedInClient();
