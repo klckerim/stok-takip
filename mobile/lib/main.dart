@@ -5,6 +5,7 @@ import 'config.dart';
 import 'offline/offline_store.dart';
 import 'pages/home_page.dart';
 import 'pages/login_page.dart';
+import 'theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,10 +23,8 @@ class StokTakipApp extends StatelessWidget {
     return MaterialApp(
       title: 'Stok Takip',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF1F6F5C),
-        useMaterial3: true,
-      ),
+      theme: buildTheme(Brightness.light),
+      darkTheme: buildTheme(Brightness.dark),
       home: ApiClient.instance.session == null ? const LoginPage() : const HomePage(),
     );
   }

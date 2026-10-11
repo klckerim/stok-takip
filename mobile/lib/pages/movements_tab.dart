@@ -3,12 +3,25 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../main.dart';
 import '../models.dart';
+import '../theme.dart';
+
+/// Hareketler sekmesinin filtresi. [type] null = hepsi; [days] 1 = bugün.
+typedef MovementFilter = ({MovementType? type, int days});
 
 /// Tüm depodaki hareketler; tip ve döneme göre filtre.
 class MovementsTab extends StatefulWidget {
-  const MovementsTab({super.key, required this.refresh, required this.onOpenProductByBarcode});
+  const MovementsTab({
+    super.key,
+    required this.refresh,
+    required this.filter,
+    required this.onOpenProductByBarcode,
+  });
 
   final ValueNotifier<int> refresh;
+
+  /// Seçili filtre. Özet ekranındaki kartlar da bunu değiştirir (ör. "Bugün çıkış").
+  final ValueNotifier<MovementFilter> filter;
+
   final Future<void> Function(String barcode) onOpenProductByBarcode;
 
   @override
@@ -19,8 +32,6 @@ class _MovementsTabState extends State<MovementsTab> {
   static const _periods = {1: 'Bugün', 7: '7 gün', 30: '30 gün'};
 
   List<MovementListItem> _items = [];
-  MovementType? _type; // null = hepsi
-  int _days = 7;
   bool _loading = true;
   String? _error;
 
@@ -28,14 +39,22 @@ class _MovementsTabState extends State<MovementsTab> {
   void initState() {
     super.initState();
     widget.refresh.addListener(_load);
+    widget.filter.addListener(_load);
     _load();
   }
 
   @override
   void dispose() {
     widget.refresh.removeListener(_load);
+    widget.filter.removeListener(_load);
     super.dispose();
   }
+
+  MovementType? get _type => widget.filter.value.type;
+  int get _days => widget.filter.value.days;
+
+  void _setFilter({required MovementType? type, required int days}) =>
+      widget.filter.value = (type: type, days: days);
 
   Future<void> _load() async {
     if (!mounted) return;
@@ -69,10 +88,7 @@ class _MovementsTabState extends State<MovementsTab> {
                 child: ChoiceChip(
                   label: Text(t?.label ?? 'Tümü'),
                   selected: _type == t,
-                  onSelected: (_) {
-                    setState(() => _type = t);
-                    _load();
-                  },
+                  onSelected: (_) => _setFilter(type: t, days: _days),
                 ),
               ),
           ]),
@@ -84,10 +100,7 @@ class _MovementsTabState extends State<MovementsTab> {
               for (final e in _periods.entries) ButtonSegment(value: e.key, label: Text(e.value)),
             ],
             selected: {_days},
-            onSelectionChanged: (s) {
-              setState(() => _days = s.first);
-              _load();
-            },
+            onSelectionChanged: (s) => _setFilter(type: _type, days: s.first),
           ),
         ),
         Expanded(child: _buildList()),
@@ -143,17 +156,8 @@ class MovementTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final m = movement;
-    final theme = Theme.of(context);
-    final negative = m.quantity < 0;
     return ListTile(
-      leading: Icon(
-        switch (m.type) {
-          MovementType.inbound => Icons.south_west,
-          MovementType.outbound => Icons.north_east,
-          MovementType.count => Icons.fact_check_outlined,
-        },
-        color: negative ? theme.colorScheme.error : theme.colorScheme.primary,
-      ),
+      leading: MovementIcon(m.type),
       title: Text(m.productName),
       subtitle: Text([
         m.summary,

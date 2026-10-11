@@ -119,6 +119,7 @@ class _ProductsTabState extends State<ProductsTab> {
             elevation: const WidgetStatePropertyAll(0),
             trailing: [
               IconButton(
+                tooltip: 'Aramayı temizle',
                 icon: const Icon(Icons.clear),
                 onPressed: () {
                   _search.clear();

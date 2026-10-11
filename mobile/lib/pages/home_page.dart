@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:cross_file/cross_file.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -37,6 +36,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// Sekmeler bunu dinler; değer artınca verilerini yeniden yükler.
   final _refresh = ValueNotifier<int>(0);
   final _criticalOnly = ValueNotifier<bool>(false);
+  final _movementsFilter = ValueNotifier<MovementFilter>((type: null, days: 7));
 
   int _tab = 0;
   Timer? _syncTimer;
@@ -58,6 +58,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _syncTimer?.cancel();
     _refresh.dispose();
     _criticalOnly.dispose();
+    _movementsFilter.dispose();
     super.dispose();
   }
 
@@ -323,7 +324,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     _criticalOnly.value = true;
                     setState(() => _tab = 1);
                   },
-                  onShowMovements: () => setState(() => _tab = 2),
+                  onShowMovements: (filter) {
+                    _movementsFilter.value = filter;
+                    setState(() => _tab = 2);
+                  },
                   onStartBatch: _startBatch,
                 ),
                 ProductsTab(
@@ -333,6 +337,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
                 MovementsTab(
                   refresh: _refresh,
+                  filter: _movementsFilter,
                   onOpenProductByBarcode: _openByBarcode,
                 ),
               ],

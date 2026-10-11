@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../main.dart';
 import '../models.dart';
+import '../offline/offline_store.dart';
+import '../theme.dart';
 import 'batch_scan_page.dart';
 import 'movements_tab.dart';
 import 'products_tab.dart';
@@ -23,7 +25,8 @@ class DashboardTab extends StatefulWidget {
   final Future<void> Function(Product product) onOpenProduct;
   final Future<void> Function(String barcode) onOpenProductByBarcode;
   final VoidCallback onShowCritical;
-  final VoidCallback onShowMovements;
+  /// Hareketler sekmesini verilen filtreyle açar (ör. "Bugün çıkış" kartı → çıkış + bugün).
+  final void Function(MovementFilter filter) onShowMovements;
   final void Function(MovementType mode) onStartBatch;
 
   @override
@@ -31,9 +34,13 @@ class DashboardTab extends StatefulWidget {
 }
 
 class _DashboardTabState extends State<DashboardTab> {
+  final _offline = OfflineStore.instance;
   Dashboard? _data;
   bool _loading = true;
   String? _error;
+
+  /// Gösterilen veri önbellekten geliyorsa kaydedildiği an; canlı veride null.
+  DateTime? _cachedAt;
 
   @override
   void initState() {
@@ -56,10 +63,27 @@ class _DashboardTabState extends State<DashboardTab> {
     });
     try {
       final data = await ApiClient.instance.getDashboard();
-      if (mounted) setState(() => _data = data);
+      if (!mounted) return;
+      setState(() {
+        _data = data;
+        _cachedAt = null;
+      });
+      _offline.setOffline(false);
+      await _offline.cacheDashboard(data);
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.isUnauthorized) return handleUnauthorized(context);
+      if (e.isNetworkError) {
+        _offline.setOffline(true);
+        final cached = _offline.cachedDashboard;
+        if (cached != null) {
+          setState(() {
+            _data = cached.data;
+            _cachedAt = cached.savedAt;
+          });
+          return;
+        }
+      }
       setState(() => _error = e.isNetworkError ? 'Özet için sunucu bağlantısı gerekiyor.' : e.message);
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -69,8 +93,10 @@ class _DashboardTabState extends State<DashboardTab> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = MovementColors.of(context);
     final data = _data;
     final session = ApiClient.instance.session;
+    final cachedAt = _cachedAt;
 
     if (data == null) {
       if (_loading) return const Center(child: CircularProgressIndicator());
@@ -96,13 +122,22 @@ class _DashboardTabState extends State<DashboardTab> {
           Text('Merhaba${session == null ? '' : ', ${session.fullName}'}', style: theme.textTheme.titleLarge),
           const SizedBox(height: 4),
           Text(formatDateTime(DateTime.now()).substring(0, 10), style: theme.textTheme.bodyMedium),
+          if (cachedAt != null) ...[
+            const SizedBox(height: 8),
+            Row(children: [
+              Icon(Icons.history, size: 16, color: theme.colorScheme.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Çevrimdışı · son güncelleme ${formatDateTime(cachedAt)}',
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ),
+            ]),
+          ],
           const SizedBox(height: 16),
           Row(children: [
-            for (final (mode, icon) in const [
-              (MovementType.count, Icons.fact_check_outlined),
-              (MovementType.inbound, Icons.south_west),
-              (MovementType.outbound, Icons.north_east),
-            ])
+            for (final mode in const [MovementType.count, MovementType.inbound, MovementType.outbound])
               Expanded(
                 child: Padding(
                   padding: EdgeInsets.only(right: mode == MovementType.outbound ? 0 : 8),
@@ -110,7 +145,7 @@ class _DashboardTabState extends State<DashboardTab> {
                     onPressed: () => widget.onStartBatch(mode),
                     style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12)),
                     child: Column(children: [
-                      Icon(icon),
+                      MovementIcon(mode),
                       const SizedBox(height: 4),
                       Text(BatchScanPage.titleFor(mode), textAlign: TextAlign.center),
                     ]),
@@ -142,28 +177,31 @@ class _DashboardTabState extends State<DashboardTab> {
           Row(children: [
             Expanded(
               child: _StatCard(
-                icon: Icons.south_west,
+                icon: movementIconData(MovementType.inbound),
+                iconColor: colors.inbound,
                 label: 'Bugün giriş',
                 value: '${data.todayIn}',
-                onTap: widget.onShowMovements,
+                onTap: () => widget.onShowMovements((type: MovementType.inbound, days: 1)),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: _StatCard(
-                icon: Icons.north_east,
+                icon: movementIconData(MovementType.outbound),
+                iconColor: colors.outbound,
                 label: 'Bugün çıkış',
                 value: '${data.todayOut}',
-                onTap: widget.onShowMovements,
+                onTap: () => widget.onShowMovements((type: MovementType.outbound, days: 1)),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: _StatCard(
-                icon: Icons.fact_check_outlined,
+                icon: movementIconData(MovementType.count),
+                iconColor: colors.count,
                 label: 'Bugün sayım',
                 value: '${data.todayCount}',
-                onTap: widget.onShowMovements,
+                onTap: () => widget.onShowMovements((type: MovementType.count, days: 1)),
               ),
             ),
           ]),
@@ -179,7 +217,11 @@ class _DashboardTabState extends State<DashboardTab> {
             ),
           ],
           const SizedBox(height: 24),
-          _SectionHeader(title: 'Son hareketler', action: 'Tümü', onAction: widget.onShowMovements),
+          _SectionHeader(
+            title: 'Son hareketler',
+            action: 'Tümü',
+            onAction: () => widget.onShowMovements((type: null, days: 7)),
+          ),
           if (data.lastMovements.isEmpty)
             const Padding(padding: EdgeInsets.all(16), child: Text('Henüz hareket yok.'))
           else
@@ -201,11 +243,13 @@ class _StatCard extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.value,
+    this.iconColor,
     this.highlight = false,
     this.onTap,
   });
 
   final IconData icon;
+  final Color? iconColor;
   final String label;
   final String value;
   final bool highlight;
@@ -226,7 +270,7 @@ class _StatCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(icon, size: 20, color: fg),
+              Icon(icon, size: 20, color: highlight ? fg : (iconColor ?? fg)),
               const SizedBox(height: 8),
               Text(value, style: theme.textTheme.headlineSmall?.copyWith(color: fg, fontWeight: FontWeight.w600)),
               Text(label, style: theme.textTheme.bodySmall?.copyWith(color: fg)),

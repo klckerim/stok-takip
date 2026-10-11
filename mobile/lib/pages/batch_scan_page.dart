@@ -9,6 +9,7 @@ import '../models.dart';
 import '../offline/offline_store.dart';
 
 /// Seri işlem: barkodlar art arda okutulur, her okutma ilgili ürünün miktarını 1 artırır.
+/// Kg/Lt/Mt gibi ölçülen birimlerde +1 anlamsız olduğu için okutunca miktar sorulur.
 /// Sonunda tüm kalemler tek seferde kaydedilir.
 /// - Sayım: sayılan miktar stok olarak yazılır (fark hareketi).
 /// - Giriş / Çıkış: toplam miktar kadar hareket.
@@ -85,25 +86,34 @@ class _BatchScanPageState extends State<BatchScanPage> {
       if (last != null && now.difference(last) < _sameBarcodeGap) continue;
       _lastSeen[value] = now;
       _addScan(value);
+      if (_paused) return; // miktar dialogu açıldı; aynı karedeki diğer barkodlar beklemesin
     }
   }
 
   void _addScan(String barcode) {
     HapticFeedback.mediumImpact();
     final existing = _findLine(barcode);
+    final line = existing ?? (_Line(barcode)..product = _offline.findCached(barcode));
+    final measured = line.product != null && isMeasuredUnit(line.product!.unit);
     setState(() {
-      if (existing != null) {
-        existing.quantity += 1;
-        _lines
-          ..remove(existing)
-          ..insert(0, existing); // son okutulan en üstte
-      } else {
-        final line = _Line(barcode)..quantity = 1;
-        line.product = _offline.findCached(barcode);
-        _lines.insert(0, line);
-        if (line.product == null) _lookup(line);
-      }
+      if (!measured) line.quantity += 1;
+      _lines
+        ..remove(line)
+        ..insert(0, line); // son okutulan en üstte
     });
+    if (measured) {
+      _askMeasured(line, isNew: existing == null);
+    } else if (line.product == null && existing == null) {
+      _lookup(line);
+    }
+  }
+
+  /// Ölçülen birimli ürün için miktarı sorar. Yeni okutulan kalemde dialog iptal edilirse kalem
+  /// listeden çıkar; aksi halde 0 miktarlı kalem seri sayımda stoğu 0'a çekerdi.
+  Future<void> _askMeasured(_Line line, {required bool isNew}) async {
+    final value = await _editQuantity(line);
+    if (!mounted || value != null || !isNew || line.quantity != 0) return;
+    setState(() => _lines.remove(line));
   }
 
   _Line? _findLine(String barcode) {
@@ -119,6 +129,11 @@ class _BatchScanPageState extends State<BatchScanPage> {
     try {
       final product = await _api.getProductByBarcode(line.barcode);
       line.product = product;
+      // Ölçülen birim sunucudan sonradan öğrenildi: okutmanın verdiği +1'i geri al, miktarı sor.
+      if (isMeasuredUnit(product.unit) && line.quantity == 1 && !_paused && mounted) {
+        line.quantity = 0;
+        _askMeasured(line, isNew: true);
+      }
     } on ApiException catch (e) {
       line.problem = e.isNotFound
           ? 'Kayıtlı değil, kaydedilmeyecek'
@@ -154,9 +169,11 @@ class _BatchScanPageState extends State<BatchScanPage> {
     if (value != null && value.isNotEmpty) _addScan(value);
   }
 
-  Future<void> _editQuantity(_Line line) async {
+  /// Miktarı elle düzenler. Dialogdaki "Kalemi sil", kaydırarak silmenin erişilebilir alternatifi.
+  /// Girilen değeri döndürür; vazgeçilirse null, silinirse [_removeLine].
+  Future<double?> _editQuantity(_Line line) async {
     setState(() => _paused = true);
-    final controller = TextEditingController(text: formatQty(line.quantity));
+    final controller = TextEditingController(text: line.quantity == 0 ? '' : formatQtyInput(line.quantity));
     final value = await showDialog<double>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -168,19 +185,60 @@ class _BatchScanPageState extends State<BatchScanPage> {
           decoration: InputDecoration(suffixText: line.product?.unit),
         ),
         actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(_removeLine),
+            style: TextButton.styleFrom(foregroundColor: Theme.of(ctx).colorScheme.error),
+            child: const Text('Kalemi sil'),
+          ),
           TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Vazgeç')),
           FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(double.tryParse(controller.text.trim().replaceAll(',', '.'))),
+            onPressed: () {
+              final v = double.tryParse(controller.text.trim().replaceAll(',', '.'));
+              Navigator.of(ctx).pop(v != null && v >= 0 ? v : null); // negatif değer "sil" sayılmasın
+            },
             child: const Text('Tamam'),
           ),
         ],
       ),
     );
-    if (!mounted) return;
+    if (!mounted) return value;
     setState(() {
       _paused = false;
       if (value != null && value >= 0) line.quantity = value;
     });
+    if (value == _removeLine) _remove(line);
+    return value;
+  }
+
+  /// _editQuantity dialogunun "Kalemi sil" dönüş değeri.
+  static const double _removeLine = -1;
+
+  /// Kalemi listeden çıkarır; yanlışlıkla silmeye karşı "Geri al" sunar.
+  void _remove(_Line line) {
+    final index = _lines.indexOf(line);
+    if (index < 0) return;
+    setState(() => _lines.removeAt(index));
+    final name = line.product?.name ?? line.barcode;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text('$name silindi.'),
+        action: SnackBarAction(
+          label: 'Geri al',
+          onPressed: () {
+            if (!mounted) return;
+            setState(() {
+              // Bu arada aynı barkod yeniden okutulduysa ikinci satır açma, miktarları birleştir.
+              final again = _findLine(line.barcode);
+              if (again != null) {
+                again.quantity += line.quantity;
+              } else {
+                _lines.insert(index.clamp(0, _lines.length), line);
+              }
+            });
+          },
+        ),
+      ));
   }
 
   void _change(_Line line, double delta) {
@@ -307,7 +365,6 @@ class _BatchScanPageState extends State<BatchScanPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final total = _lines.fold<double>(0, (sum, l) => sum + l.quantity);
     final saveCount = _saveable.length;
 
     return PopScope(
@@ -354,9 +411,10 @@ class _BatchScanPageState extends State<BatchScanPage> {
               color: theme.colorScheme.secondaryContainer,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text(
+                // Toplam miktar gösterilmez: Kg ile Adet'i toplamak anlamsız.
                 _lines.isEmpty
-                    ? 'Barkodları art arda okut. Her okutma miktarı 1 artırır.'
-                    : '${_lines.length} kalem · toplam ${formatQty(total)}',
+                    ? 'Barkodları art arda okut. Her okutma miktarı 1 artırır; Kg/Lt/Mt ürünlerde miktar sorulur.'
+                    : '${_lines.length} kalem okutuldu',
                 style: theme.textTheme.bodyMedium,
               ),
             ),
@@ -400,7 +458,7 @@ class _BatchScanPageState extends State<BatchScanPage> {
         padding: const EdgeInsets.only(right: 16),
         child: const Icon(Icons.delete_outline),
       ),
-      onDismissed: (_) => setState(() => _lines.remove(line)),
+      onDismissed: (_) => _remove(line),
       child: ListTile(
         title: Text(
           p?.name ?? line.barcode,
@@ -416,25 +474,44 @@ class _BatchScanPageState extends State<BatchScanPage> {
                       : line.barcode,
           style: hasProblem ? TextStyle(color: theme.colorScheme.error) : null,
         ),
-        trailing: hasProblem || line.looking
+        trailing: line.looking
             ? null
-            : Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(icon: const Icon(Icons.remove_circle_outline), onPressed: () => _change(line, -1)),
-                  InkWell(
-                    onTap: () => _editQuantity(line),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                      child: Text(
-                        '${formatQty(line.quantity)} ${p?.unit ?? ''}',
-                        style: theme.textTheme.titleMedium,
+            : hasProblem
+                ? IconButton(
+                    tooltip: 'Kalemi sil',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => _remove(line),
+                  )
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: '1 azalt',
+                        icon: const Icon(Icons.remove_circle_outline),
+                        onPressed: () => _change(line, -1),
                       ),
-                    ),
+                      // Dokunulabilir olduğu belli olsun diye çerçeveli; 48 dp dokunma alanı.
+                      Tooltip(
+                        message: 'Miktarı düzenle',
+                        child: OutlinedButton(
+                          onPressed: () => _editQuantity(line),
+                          style: OutlinedButton.styleFrom(
+                            minimumSize: const Size(56, 48),
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                          ),
+                          child: Text(
+                            '${formatQty(line.quantity)} ${p?.unit ?? ''}',
+                            style: theme.textTheme.titleMedium,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: '1 artır',
+                        icon: const Icon(Icons.add_circle_outline),
+                        onPressed: () => _change(line, 1),
+                      ),
+                    ],
                   ),
-                  IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: () => _change(line, 1)),
-                ],
-              ),
       ),
     );
   }

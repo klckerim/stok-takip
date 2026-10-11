@@ -5,6 +5,7 @@ import '../api/api_client.dart';
 import '../main.dart';
 import '../models.dart';
 import '../offline/offline_store.dart';
+import '../theme.dart';
 import 'edit_product_page.dart';
 
 class ProductPage extends StatefulWidget {
@@ -19,12 +20,16 @@ class ProductPage extends StatefulWidget {
 class _ProductPageState extends State<ProductPage> {
   static const _uuid = Uuid();
 
+  /// Uygulama açık kaldığı sürece son seçilen işlem tipi hatırlanır
+  /// (personel genelde art arda aynı işlemi yapar: ör. bir dizi çıkış).
+  static MovementType _lastType = MovementType.inbound;
+
   final _api = ApiClient.instance;
   final _quantity = TextEditingController();
   final _note = TextEditingController();
   late Product _product = widget.product;
   late double _stock = widget.product.stock;
-  MovementType _type = MovementType.inbound;
+  MovementType _type = _lastType;
   bool _saving = false;
 
   /// Bu ekranda çevrimdışı kayıt yapıldı; gösterilen stok tahmini.
@@ -67,7 +72,7 @@ class _ProductPageState extends State<ProductPage> {
   /// Hızlı miktar düğmeleri: mevcut değerin üstüne ekler.
   void _addToQuantity(double step) {
     final current = _parseQuantity() ?? 0;
-    setState(() => _quantity.text = formatQty(current + step));
+    setState(() => _quantity.text = formatQtyInput(current + step));
   }
 
   double? _parseQuantity() => double.tryParse(_quantity.text.trim().replaceAll(',', '.'));
@@ -161,6 +166,7 @@ class _ProductPageState extends State<ProductPage> {
     final theme = Theme.of(context);
     final p = _product;
     final isAdmin = _api.session?.isAdmin ?? false;
+    final colors = MovementColors.of(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -214,11 +220,17 @@ class _ProductPageState extends State<ProductPage> {
           const SizedBox(height: 24),
           SegmentedButton<MovementType>(
             segments: [
-              for (final t in MovementType.values) ButtonSegment(value: t, label: Text(t.label)),
+              for (final t in MovementType.values)
+                ButtonSegment(value: t, icon: Icon(movementIconData(t)), label: Text(t.label)),
             ],
             selected: {_type},
+            showSelectedIcon: false,
+            style: SegmentedButton.styleFrom(
+              selectedBackgroundColor: colors.colorFor(_type),
+              selectedForegroundColor: colors.onColorFor(_type),
+            ),
             onSelectionChanged: (s) => setState(() {
-              _type = s.first;
+              _type = _lastType = s.first;
               _requestId = _uuid.v4(); // farklı işlem = farklı istek
             }),
           ),
@@ -250,14 +262,22 @@ class _ProductPageState extends State<ProductPage> {
             decoration: const InputDecoration(labelText: 'Not (isteğe bağlı)', border: OutlineInputBorder()),
           ),
           const SizedBox(height: 20),
-          FilledButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: _saving
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.check),
-            label: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Text('Kaydet'),
+          // Düğme hangi işlemin kaydedileceğini rengi ve metniyle söyler; yanlış tipte kayıt riskini azaltır.
+          ValueListenableBuilder(
+            valueListenable: _quantity,
+            builder: (context, _, __) => FilledButton.icon(
+              onPressed: _saving ? null : _save,
+              style: FilledButton.styleFrom(
+                backgroundColor: colors.colorFor(_type),
+                foregroundColor: colors.onColorFor(_type),
+              ),
+              icon: _saving
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : Icon(movementIconData(_type)),
+              label: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Text(_saveLabel(p.unit)),
+              ),
             ),
           ),
           const SizedBox(height: 32),
@@ -281,15 +301,8 @@ class _ProductPageState extends State<ProductPage> {
       for (final m in _movements)
         ListTile(
           contentPadding: EdgeInsets.zero,
-          leading: Icon(
-            switch (m.type) {
-              MovementType.inbound => Icons.south_west,
-              MovementType.outbound => Icons.north_east,
-              MovementType.count => Icons.fact_check_outlined,
-            },
-            color: m.quantity < 0 ? theme.colorScheme.error : theme.colorScheme.primary,
-          ),
-          title: Text(_movementTitle(m)),
+          leading: MovementIcon(m.type),
+          title: Text(describeMovement(m.type, m.quantity, m.countedQuantity, _product.unit)),
           subtitle: Text([
             formatDateTime(m.createdAt),
             m.userName,
@@ -299,16 +312,14 @@ class _ProductPageState extends State<ProductPage> {
     ];
   }
 
-  String _movementTitle(Movement m) {
-    final unit = _product.unit;
-    switch (m.type) {
-      case MovementType.inbound:
-        return 'Giriş +${formatQty(m.quantity)} $unit';
-      case MovementType.outbound:
-        return 'Çıkış ${formatQty(m.quantity)} $unit';
-      case MovementType.count:
-        final diff = m.quantity >= 0 ? '+${formatQty(m.quantity)}' : formatQty(m.quantity);
-        return 'Sayım ${formatQty(m.countedQuantity ?? 0)} $unit (fark $diff)';
-    }
+  /// "Çıkışı kaydet · 5 Adet" — miktar girilmemişse sadece işlem adı.
+  String _saveLabel(String unit) {
+    final action = switch (_type) {
+      MovementType.inbound => 'Girişi kaydet',
+      MovementType.outbound => 'Çıkışı kaydet',
+      MovementType.count => 'Sayımı kaydet',
+    };
+    final qty = _parseQuantity();
+    return qty == null ? action : '$action · ${formatQty(qty)} $unit';
   }
 }

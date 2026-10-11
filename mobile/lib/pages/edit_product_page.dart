@@ -17,7 +17,7 @@ class EditProductPage extends StatefulWidget {
 
 class _EditProductPageState extends State<EditProductPage> {
   late final _name = TextEditingController(text: widget.product.name);
-  late final _minStock = TextEditingController(text: formatQty(widget.product.minStock));
+  late final _minStock = TextEditingController(text: formatQtyInput(widget.product.minStock));
   late String _unit = units.contains(widget.product.unit) ? widget.product.unit : units.first;
   late int? _categoryId = widget.product.categoryId;
   bool _saving = false;
