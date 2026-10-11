@@ -8,15 +8,18 @@ import '../offline/offline_store.dart';
 import '../theme.dart';
 import 'edit_product_page.dart';
 
-/// Ürün ekranı: stok, giriş/çıkış/sayım kaydı, son hareketler.
+/// Ürün ekranı: stok, tüketim tahmini, giriş/çıkış/sayım kaydı, son hareketler.
 /// "Kaydet ve sıradakini okut" ile kaydedilirse `true` döndürür; çağıran taramayı yeniden açar.
 class ProductPage extends StatefulWidget {
-  const ProductPage({super.key, required this.product, this.autofocusQuantity = false});
+  const ProductPage({super.key, required this.product, this.autofocusQuantity = false, this.forecastLoader});
 
   final Product product;
 
   /// Barkod okutularak açıldıysa miktar alanı odaklanır (bir dokunuş daha az).
   final bool autofocusQuantity;
+
+  /// Tahmini getiren fonksiyon; testlerde sahte veri için. Varsayılan: API.
+  final Future<ProductForecast> Function(int productId)? forecastLoader;
 
   @override
   State<ProductPage> createState() => _ProductPageState();
@@ -43,6 +46,10 @@ class _ProductPageState extends State<ProductPage> {
   List<Movement> _movements = [];
   bool _loadingMovements = true;
 
+  /// Tüketim tahmini. Yüklenemezse (çevrimdışı, eski sunucu) null: kart görünmez.
+  ProductForecast? _forecast;
+  bool _applyingMinStock = false;
+
   // Aynı kayıt için sabit kalır: ağ hatasından sonra "Kaydet"e tekrar basılırsa
   // sunucu hareketi iki kez yazmaz. Başarılı kayıttan sonra yenilenir.
   String _requestId = _uuid.v4();
@@ -54,6 +61,7 @@ class _ProductPageState extends State<ProductPage> {
     super.initState();
     _quantity.addListener(_onQuantityChanged);
     _loadMovements();
+    _loadForecast();
   }
 
   // Kaydet etiketi, stok uyarısı ve sayım farkı girilen miktara göre güncellenir.
@@ -75,6 +83,41 @@ class _ProductPageState extends State<ProductPage> {
       if (e.isUnauthorized) return handleUnauthorized(context);
     } finally {
       if (mounted) setState(() => _loadingMovements = false);
+    }
+  }
+
+  Future<void> _loadForecast() async {
+    try {
+      final f = await (widget.forecastLoader ?? _api.getProductForecast)(_product.id);
+      if (mounted) setState(() => _forecast = f);
+    } catch (_) {
+      // Ek bilgi; yüklenemezse kart gizli kalır.
+    }
+  }
+
+  /// Sadece yönetici: önerilen kritik seviyeyi tek dokunuşla uygula.
+  Future<void> _applySuggestedMinStock(double value) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _applyingMinStock = true);
+    try {
+      final updated = await _api.updateProduct(
+        _product.id,
+        name: _product.name,
+        unit: _product.unit,
+        minStock: value,
+        categoryId: _product.categoryId,
+      );
+      if (!mounted) return;
+      setState(() => _product = updated);
+      messenger.showSnackBar(SnackBar(
+        content: Text('Kritik seviye ${formatQty(value)} ${updated.unit} olarak kaydedildi.'),
+      ));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.isUnauthorized) return handleUnauthorized(context);
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _applyingMinStock = false);
     }
   }
 
@@ -120,6 +163,7 @@ class _ProductPageState extends State<ProductPage> {
         return;
       }
       _loadMovements();
+      _loadForecast();
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.isUnauthorized) return handleUnauthorized(context);
@@ -177,6 +221,7 @@ class _ProductPageState extends State<ProductPage> {
       _product = updated;
       _stock = updated.stock;
     });
+    _loadForecast();
   }
 
   @override
@@ -213,6 +258,10 @@ class _ProductPageState extends State<ProductPage> {
                 ),
                 const SizedBox(height: 16),
                 _buildStockCard(theme),
+                if (_forecast != null) ...[
+                  const SizedBox(height: 8),
+                  _buildForecastCard(theme, _forecast!, isAdmin),
+                ],
                 const SizedBox(height: 24),
                 SegmentedButton<MovementType>(
                   segments: [
@@ -300,6 +349,72 @@ class _ProductPageState extends State<ProductPage> {
                   fontWeight: _isCritical ? FontWeight.w600 : null,
                 ),
               ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// "Günde ortalama 2,1 Adet çıkış · ~6 gün yeter · önerilen kritik seviye 21".
+  /// Tahmin sunucudaki stoğa göredir; çevrimdışı kayıttan sonra eski kalabilir.
+  Widget _buildForecastCard(ThemeData theme, ProductForecast f, bool isAdmin) {
+    final unit = _product.unit;
+    final muted = theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final left = f.daysLeft;
+    final canApply = isAdmin && f.hasData && f.suggestedMinStock != _product.minStock;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.insights_outlined, size: 20, color: theme.colorScheme.primary),
+              const SizedBox(width: 8),
+              Expanded(child: Text('Tüketim tahmini', style: theme.textTheme.titleSmall)),
+            ]),
+            const SizedBox(height: 8),
+            if (!f.hasData)
+              Text('Son ${f.windowDays} günde çıkış yok; tahmin için veri yetersiz.', style: muted)
+            else ...[
+              Text('Günde ortalama ${formatRate(f.avgDailyOut)} $unit çıkış (son ${f.windowDays} gün)'),
+              if (left != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  left <= 0
+                      ? 'Stok bitti.'
+                      : 'Bu hızla ${formatDaysLeft(left)} yeter'
+                          '${f.stockoutDate == null ? '' : ' (${formatDate(f.stockoutDate!)})'}',
+                  style: TextStyle(
+                    color: f.endsBeforeResupply ? theme.colorScheme.error : null,
+                    fontWeight: f.endsBeforeResupply ? FontWeight.w600 : null,
+                  ),
+                ),
+                if (f.endsBeforeResupply && left > 0)
+                  Text('Tedarik süresi ${f.leadTimeDays} gün: sipariş verme zamanı.',
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error)),
+              ],
+              const SizedBox(height: 12),
+              Text('Önerilen kritik seviye: ${formatQty(f.suggestedMinStock)} $unit'),
+              Text(
+                'Günlük çıkış × (${f.leadTimeDays} gün tedarik + ${f.safetyDays} gün emniyet payı)',
+                style: muted,
+              ),
+              if (canApply) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: FilledButton.tonalIcon(
+                    onPressed: _applyingMinStock ? null : () => _applySuggestedMinStock(f.suggestedMinStock),
+                    icon: _applyingMinStock
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.check),
+                    label: Text('Kritik seviyeyi ${formatQty(f.suggestedMinStock)} yap'),
+                  ),
+                ),
+              ],
             ],
           ],
         ),

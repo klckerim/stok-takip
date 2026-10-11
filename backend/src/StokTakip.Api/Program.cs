@@ -16,6 +16,7 @@ if (jwt.Key.Length < 32)
     throw new InvalidOperationException("Jwt:Key en az 32 karakter olmalı (ortam değişkeni: Jwt__Key).");
 builder.Services.AddSingleton(jwt);
 builder.Services.AddSingleton<TokenService>();
+builder.Services.AddSingleton(builder.Configuration.GetSection("Insights").Get<InsightOptions>() ?? new InsightOptions());
 
 // --- Veritabanı ---
 builder.Services.AddDbContext<AppDbContext>((sp, options) =>
@@ -62,6 +63,8 @@ app.MapMovementEndpoints();
 app.MapReportEndpoints();
 app.MapDashboardEndpoints();
 app.MapCategoryEndpoints();
+app.MapInsightEndpoints();
+app.MapDemoEndpoints();
 
 await DbInitializer.InitializeAsync(app.Services, app.Logger);
 

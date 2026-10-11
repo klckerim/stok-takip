@@ -71,3 +71,29 @@ public record DashboardDto(
     int TodayCount,
     List<ProductDto> CriticalProducts,
     List<MovementListItemDto> LastMovements);
+
+public record ProductForecastDto(
+    decimal AvgDailyOut,
+    double? DaysLeft,
+    DateTime? StockoutDateUtc,
+    decimal SuggestedMinStock,
+    int WindowDays,
+    int LeadTimeDays,
+    int SafetyDays);
+
+public record StockoutDto(ProductDto Product, decimal AvgDailyOut, double DaysLeft, DateTime StockoutDateUtc, decimal SuggestedMinStock);
+
+public record AnomalyDto(
+    long MovementId,
+    int ProductId,
+    string Barcode,
+    string ProductName,
+    string Unit,
+    MovementType Type,
+    decimal Quantity,
+    decimal? CountedQuantity,
+    string UserName,
+    DateTime CreatedAtUtc,
+    string Reason);
+
+public record InsightsDto(List<StockoutDto> Stockouts, List<AnomalyDto> Anomalies, int WindowDays, int LeadTimeDays);

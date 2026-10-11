@@ -216,6 +216,158 @@ class Dashboard {
       };
 }
 
+/// Ürünün tüketim tahmini (GET /api/products/{id}/forecast).
+/// İstatistik: son [windowDays] günün ortalama günlük çıkışı.
+class ProductForecast {
+  final double avgDailyOut;
+
+  /// Bu hızla stok kaç gün yeter. Çıkış yoksa null.
+  final double? daysLeft;
+  final DateTime? stockoutDate;
+
+  /// Günlük çıkış × (tedarik süresi + emniyet payı).
+  final double suggestedMinStock;
+  final int windowDays;
+  final int leadTimeDays;
+  final int safetyDays;
+
+  const ProductForecast({
+    required this.avgDailyOut,
+    required this.daysLeft,
+    required this.stockoutDate,
+    required this.suggestedMinStock,
+    required this.windowDays,
+    required this.leadTimeDays,
+    required this.safetyDays,
+  });
+
+  /// Pencerede hiç çıkış yoksa tahmin yapılamaz.
+  bool get hasData => avgDailyOut > 0;
+
+  /// Stok, tedarikçiden yeni mal gelmeden bitebilir.
+  bool get endsBeforeResupply => daysLeft != null && daysLeft! <= leadTimeDays;
+
+  factory ProductForecast.fromJson(Map<String, dynamic> json) => ProductForecast(
+        avgDailyOut: (json['avgDailyOut'] as num).toDouble(),
+        daysLeft: (json['daysLeft'] as num?)?.toDouble(),
+        stockoutDate: json['stockoutDateUtc'] == null ? null : Movement._parseUtc(json['stockoutDateUtc'] as String),
+        suggestedMinStock: (json['suggestedMinStock'] as num).toDouble(),
+        windowDays: json['windowDays'] as int,
+        leadTimeDays: json['leadTimeDays'] as int,
+        safetyDays: json['safetyDays'] as int,
+      );
+}
+
+/// Özet ekranındaki "Yakında tükenecek" satırı.
+class StockoutForecast {
+  final Product product;
+  final double avgDailyOut;
+  final double daysLeft;
+  final DateTime stockoutDate;
+  final double suggestedMinStock;
+
+  const StockoutForecast({
+    required this.product,
+    required this.avgDailyOut,
+    required this.daysLeft,
+    required this.stockoutDate,
+    required this.suggestedMinStock,
+  });
+
+  factory StockoutForecast.fromJson(Map<String, dynamic> json) => StockoutForecast(
+        product: Product.fromJson(json['product'] as Map<String, dynamic>),
+        avgDailyOut: (json['avgDailyOut'] as num).toDouble(),
+        daysLeft: (json['daysLeft'] as num).toDouble(),
+        stockoutDate: Movement._parseUtc(json['stockoutDateUtc'] as String),
+        suggestedMinStock: (json['suggestedMinStock'] as num).toDouble(),
+      );
+}
+
+/// Özet ekranındaki "İncelenmesi gereken hareketler" satırı: olağan dışı çıkış veya büyük sayım farkı.
+class MovementAnomaly {
+  final int movementId;
+  final int productId;
+  final String barcode;
+  final String productName;
+  final String unit;
+  final MovementType type;
+  final double quantity;
+  final double? countedQuantity;
+  final String userName;
+  final DateTime createdAt;
+
+  /// Sunucunun açıklaması: "Normalin 6 katı çıkış (ortalama 10 Adet)".
+  final String reason;
+
+  const MovementAnomaly({
+    required this.movementId,
+    required this.productId,
+    required this.barcode,
+    required this.productName,
+    required this.unit,
+    required this.type,
+    required this.quantity,
+    required this.countedQuantity,
+    required this.userName,
+    required this.createdAt,
+    required this.reason,
+  });
+
+  factory MovementAnomaly.fromJson(Map<String, dynamic> json) => MovementAnomaly(
+        movementId: json['movementId'] as int,
+        productId: json['productId'] as int,
+        barcode: json['barcode'] as String,
+        productName: json['productName'] as String,
+        unit: json['unit'] as String,
+        type: MovementType.fromApi(json['type'] as String),
+        quantity: (json['quantity'] as num).toDouble(),
+        countedQuantity: (json['countedQuantity'] as num?)?.toDouble(),
+        userName: json['userName'] as String,
+        createdAt: Movement._parseUtc(json['createdAtUtc'] as String),
+        reason: json['reason'] as String,
+      );
+}
+
+/// GET /api/insights
+class Insights {
+  final List<StockoutForecast> stockouts;
+  final List<MovementAnomaly> anomalies;
+  final int windowDays;
+  final int leadTimeDays;
+
+  const Insights({
+    required this.stockouts,
+    required this.anomalies,
+    required this.windowDays,
+    required this.leadTimeDays,
+  });
+
+  factory Insights.fromJson(Map<String, dynamic> json) => Insights(
+        stockouts: (json['stockouts'] as List<dynamic>)
+            .map((e) => StockoutForecast.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        anomalies: (json['anomalies'] as List<dynamic>)
+            .map((e) => MovementAnomaly.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        windowDays: json['windowDays'] as int,
+        leadTimeDays: json['leadTimeDays'] as int,
+      );
+}
+
+/// "~5 gün", "1 günden az", "tükendi".
+String formatDaysLeft(double days) {
+  if (days <= 0) return 'tükendi';
+  if (days < 1) return '1 günden az';
+  return '~${days.round()} gün';
+}
+
+/// Günlük ortalama gibi oranlar için okunur yuvarlama: 2,143 → 2,1; 0,043 → 0,04; 123,4 → 123.
+String formatRate(double value) {
+  if (value >= 10) return formatQty(value.roundToDouble());
+  if (value >= 0.1) return formatQty((value * 10).round() / 10);
+  return formatQty((value * 100).round() / 100);
+}
+
 String describeMovement(MovementType type, double quantity, double? countedQuantity, String unit) {
   switch (type) {
     case MovementType.inbound:
@@ -265,6 +417,9 @@ String formatQtyInput(double value) => formatQty(value).replaceAll('.', '');
 
 /// Tartılan/ölçülen birimler: toplu okutmada her okutma +1 sayılmaz, miktar sorulur.
 bool isMeasuredUnit(String unit) => const {'Kg', 'Lt', 'Mt'}.contains(unit);
+
+/// 16.10.2026
+String formatDate(DateTime d) => formatDateTime(d).substring(0, 10);
 
 String formatDateTime(DateTime d) {
   String two(int n) => n.toString().padLeft(2, '0');

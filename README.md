@@ -21,6 +21,9 @@ Depo personeli telefonla ürün barkodunu okutur; giriş, çıkış veya sayım 
 - Rol bazlı yetki: depo personeli hareket girer, yönetici ürün ekler ve kritik seviyeyi değiştirir
 - Çevrimdışı çalışma: depoda bağlantı yokken giriş/çıkış/sayım telefonda kuyruğa alınır, bağlantı gelince kendiliğinden gönderilir
 - Excel raporları (stok ve son 30 gün hareketleri): telefondan indirip WhatsApp, e-posta veya Dosyalar ile paylaşma
+- **Tükenme tahmini:** özet ekranında "Yakında tükenecek" listesi (stok bu hızla kaç gün yeter, hangi gün biter); tedarik süresinden önce bitecekler kırmızı
+- **Kritik seviye önerisi:** ürün ekranında günlük ortalama çıkış ve önerilen kritik seviye; yönetici tek dokunuşla uygular
+- **Şüpheli hareket tespiti:** ürünün kendi geçmişine göre olağan dışı büyük çıkışlar ve büyük sayım farkları özet ekranında "İncelenmesi gereken hareketler" olarak listelenir
 
 - **Mobil:** Flutter (Android / iOS), kamerayla barkod okuma (`mobile_scanner`)
 - **Backend:** ASP.NET Core 10 Minimal API, JWT ile giriş, rol bazlı yetki
@@ -41,6 +44,22 @@ backend/  .NET API + testler + docker-compose
 - **Idempotency.** Mobil her kayıt için bir `clientRequestId` (GUID) üretir. Zayıf Wi-Fi'de istek tekrar gönderilirse hareket iki kez yazılmaz.
 - **Çevrimdışı kuyruk.** Sunucuya ulaşılamazsa hareket cihazda (SharedPreferences) saklanır; uygulama açılınca, ön plana gelince ve 30 sn'de bir gönderilmeye çalışılır. Aynı `clientRequestId` kullanıldığı için istek aslında sunucuya ulaşmış olsa bile çift kayıt oluşmaz. Hareket, gönderildiği an değil gerçekten yapıldığı an (`occurredAtUtc`) ile kaydedilir. Ürün listesi önbelleğe alındığı için barkod okutma da çevrimdışı çalışır.
 - **Bilinen sınır.** Çevrimdışı sayım, gönderildiği andaki stoğa göre fark yazar; arada başka cihazdan hareket girildiyse sayım onu da düzeltmiş sayılır. Sunucu, stoktan fazla çıkışı gönderim anında reddeder; reddedilen kayıt "Gönderilmeyi bekleyenler" ekranında sebebiyle görünür, tekrar denenebilir ya da silinebilir.
+
+## Tahmin ve anomali tespiti nasıl çalışır
+
+Makine öğrenmesi modeli değil; açıklanabilir istatistik. Küçük bir depoda birkaç aylık veriyle ML modeli eğitmek gürültüyü öğrenir; bu kurallar her sonucu "neden" sorusuna cevap verecek şekilde üretir. Hesaplar `Services/StockInsights.cs` içinde, veritabanından bağımsız saf fonksiyonlar olarak durur ve birim testleriyle doğrulanır.
+
+| Ne | Nasıl |
+| --- | --- |
+| Günlük ortalama çıkış | Son 30 günün çıkış toplamı / 30. Ürün daha yeniyse pencere ilk hareketten bugüne kısaltılır (en az 7 gün), yoksa ortalama düşük çıkar. |
+| Kaç gün yeter | Anlık stok / günlük ortalama çıkış |
+| Önerilen kritik seviye | Günlük ortalama × (tedarik süresi 7 gün + emniyet payı 3 gün) |
+| Olağan dışı çıkış | Son 60 günün çıkışlarına göre: ortalama + 3 standart sapmanın üstünde **ve** ortalamanın en az 2 katı. En az 5 geçmiş çıkış yoksa karar verilmez (az veriyle yanlış alarm olmasın). |
+| Büyük sayım farkı | Fark, sistemdeki stoğun %10'unu aşıyorsa |
+
+Eşikler `appsettings.json` → `Insights` bölümünden değiştirilir (ör. tedarikçiniz 3 günde getiriyorsa `LeadTimeDays: 3`).
+
+**Demo geçmişi:** Tahminlerin boş görünmemesi için geliştirme ortamında ilk açılışta her ürüne 60 günlük örnek çıkış geçmişi üretilir (anlık stok değişmez). Mevcut bir veritabanına sonradan eklemek için Scalar'da yönetici olarak `POST /api/demo/history` çağır. Bu uç sadece `Development` ortamında açıktır; 10'dan fazla çıkışı olan ürünlere dokunmaz.
 
 ## 1. Backend'i çalıştır
 
@@ -138,6 +157,9 @@ Emülatörde kamera yoksa barkod ekranındaki **Elle gir** ile demo barkodlardan
 | GET | `/api/movements?type=&days=7&productId=` | Giriş | Tüm hareketler, filtreli |
 | GET | `/api/reports/stock.xlsx` | Giriş | Stok raporu (Excel) |
 | GET | `/api/reports/movements.xlsx?days=30` | Giriş | Hareket raporu (Excel) |
+| GET | `/api/insights?days=30` | Giriş | `days` gün içinde tükenecek ürünler ve son 7 günün şüpheli hareketleri |
+| GET | `/api/products/{id}/forecast` | Giriş | Günlük ortalama çıkış, kaç gün yeter, önerilen kritik seviye |
+| POST | `/api/demo/history?days=60` | Admin (sadece Development) | Demo için geçmiş çıkış hareketleri üretir |
 
 Scalar'da (`/scalar`) önce login ol, dönen token'ı **Authentication → Bearer** alanına bir kez yapıştır; tüm isteklerde kullanılır.
 

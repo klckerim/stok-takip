@@ -64,6 +64,45 @@ void main() {
     ],
   );
 
+  final insights = Insights(
+    stockouts: [
+      StockoutForecast(
+        product: product,
+        avgDailyOut: 1250.5,
+        daysLeft: 3.2,
+        stockoutDate: DateTime(2026, 10, 14, 12),
+        suggestedMinStock: 12505,
+      ),
+    ],
+    anomalies: [
+      MovementAnomaly(
+        movementId: 2,
+        productId: 1,
+        barcode: product.barcode,
+        productName: product.name,
+        unit: product.unit,
+        type: MovementType.outbound,
+        quantity: -7500,
+        countedQuantity: null,
+        userName: 'Depo Personeli',
+        createdAt: DateTime(2026, 10, 10, 14, 20),
+        reason: 'Normalin 6 katı çıkış (ortalama 1.250,5 Paket)',
+      ),
+    ],
+    windowDays: 30,
+    leadTimeDays: 7,
+  );
+
+  final forecast = ProductForecast(
+    avgDailyOut: 1250.5,
+    daysLeft: 3.2,
+    stockoutDate: DateTime(2026, 10, 14, 12),
+    suggestedMinStock: 12505,
+    windowDays: 30,
+    leadTimeDays: 7,
+    safetyDays: 3,
+  );
+
   Future<void> pumpScaled(WidgetTester tester, double scale, Widget home) async {
     tester.view.physicalSize = const Size(360, 640); // küçük Android telefon
     tester.view.devicePixelRatio = 1;
@@ -82,7 +121,9 @@ void main() {
   for (final scale in [1.0, 1.5, 2.0]) {
     group('yazı boyutu ${scale}x', () {
       testWidgets('Ürün ekranı', (tester) async {
-        await pumpScaled(tester, scale, const ProductPage(product: product));
+        await pumpScaled(tester, scale, ProductPage(product: product, forecastLoader: (_) async => forecast));
+        await tester.pump();
+        expect(find.text('Tüketim tahmini'), findsOneWidget);
         final list = find.byType(Scrollable).first;
         await tester.scrollUntilVisible(find.text('Sayım'), 100, scrollable: list);
         await tester.tap(find.text('Sayım'));
@@ -101,6 +142,7 @@ void main() {
             body: DashboardTab(
               refresh: ValueNotifier(0),
               loader: () async => dashboard,
+              insightsLoader: () async => insights,
               onOpenProduct: (_) async {},
               onOpenProductByBarcode: (_) async {},
               onShowCritical: () {},
@@ -114,6 +156,11 @@ void main() {
         final oneLine = tester.getSize(find.text('7')).height;
         expect(tester.getSize(find.text('1032')).height, lessThanOrEqualTo(oneLine));
         expect(tester.getSize(find.text('1250')).height, lessThanOrEqualTo(oneLine));
+        // Tahmin bölümleri de taşmadan çizilmeli.
+        final list = find.byType(Scrollable).first;
+        await tester.scrollUntilVisible(find.text('Yakında tükenecek'), 100, scrollable: list);
+        await tester.scrollUntilVisible(find.text('İncelenmesi gereken hareketler'), 100, scrollable: list);
+        expect(find.textContaining('6 katı', findRichText: true), findsOneWidget);
       }, skip: !hasFonts);
 
       testWidgets('Giriş ekranı', (tester) async {

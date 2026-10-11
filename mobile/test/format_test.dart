@@ -36,4 +36,78 @@ void main() {
     expect(isMeasuredUnit('Lt'), isTrue);
     expect(isMeasuredUnit('Adet'), isFalse);
   });
+
+  test('formatRate okunur yuvarlar', () {
+    expect(formatRate(2.143), '2,1');
+    expect(formatRate(0.043), '0,04');
+    expect(formatRate(123.4), '123');
+    expect(formatRate(1250), '1.250');
+  });
+
+  test('formatDaysLeft', () {
+    expect(formatDaysLeft(0), 'tükendi');
+    expect(formatDaysLeft(0.4), '1 günden az');
+    expect(formatDaysLeft(4.7), '~5 gün');
+  });
+
+  test('ProductForecast API cevabını okur', () {
+    final f = ProductForecast.fromJson({
+      'avgDailyOut': 2.143,
+      'daysLeft': 4.7,
+      'stockoutDateUtc': '2026-10-16T08:00:00Z',
+      'suggestedMinStock': 22,
+      'windowDays': 30,
+      'leadTimeDays': 7,
+      'safetyDays': 3,
+    });
+    expect(f.hasData, isTrue);
+    expect(f.endsBeforeResupply, isTrue);
+    expect(f.stockoutDate!.isUtc, isFalse); // yerel saate çevrilir
+
+    final empty = ProductForecast.fromJson({
+      'avgDailyOut': 0,
+      'daysLeft': null,
+      'stockoutDateUtc': null,
+      'suggestedMinStock': 0,
+      'windowDays': 30,
+      'leadTimeDays': 7,
+      'safetyDays': 3,
+    });
+    expect(empty.hasData, isFalse);
+    expect(empty.endsBeforeResupply, isFalse);
+  });
+
+  test('Insights API cevabını okur', () {
+    final i = Insights.fromJson({
+      'stockouts': [
+        {
+          'product': {'id': 1, 'barcode': '869', 'name': 'Koli bandı', 'unit': 'Adet', 'stock': 10, 'minStock': 5},
+          'avgDailyOut': 2,
+          'daysLeft': 5,
+          'stockoutDateUtc': '2026-10-16T08:00:00',
+          'suggestedMinStock': 20,
+        }
+      ],
+      'anomalies': [
+        {
+          'movementId': 7,
+          'productId': 1,
+          'barcode': '869',
+          'productName': 'Koli bandı',
+          'unit': 'Adet',
+          'type': 'Out',
+          'quantity': -60,
+          'countedQuantity': null,
+          'userName': 'Depo Personeli',
+          'createdAtUtc': '2026-10-09T11:20:00Z',
+          'reason': 'Normalin 6 katı çıkış (ortalama 10 Adet)',
+        }
+      ],
+      'windowDays': 30,
+      'leadTimeDays': 7,
+    });
+    expect(i.stockouts.single.product.name, 'Koli bandı');
+    expect(i.anomalies.single.type, MovementType.outbound);
+    expect(i.anomalies.single.reason, contains('6 katı'));
+  });
 }

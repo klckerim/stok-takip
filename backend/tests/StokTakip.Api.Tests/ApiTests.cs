@@ -233,6 +233,44 @@ public class ApiTests(ApiFixture fixture) : IClassFixture<ApiFixture>
     }
 
     [Fact]
+    public async Task Insights_show_stockout_forecasts_from_demo_history()
+    {
+        var client = await LoggedInClient();
+        var insights = await client.GetFromJsonAsync<InsightsDto>("/api/insights", Json);
+
+        Assert.NotNull(insights);
+        Assert.NotEmpty(insights!.Stockouts);
+        Assert.All(insights.Stockouts, s => Assert.True(s.AvgDailyOut > 0 && s.DaysLeft <= 30));
+        Assert.Contains(insights.Anomalies, a => a.Type == MovementType.Out); // demo geçmişindeki olağan dışı çıkış
+    }
+
+    [Fact]
+    public async Task Big_count_difference_appears_in_anomalies()
+    {
+        var client = await LoggedInClient();
+        var product = await GetByBarcode(client, "8690000000042");
+
+        await client.PostAsJsonAsync("/api/movements",
+            new CreateMovementRequest(product.Id, MovementType.Count, Math.Round(product.Stock * 0.6m), "büyük fark", null), Json);
+        var insights = await client.GetFromJsonAsync<InsightsDto>("/api/insights", Json);
+
+        Assert.Contains(insights!.Anomalies, a => a.ProductId == product.Id && a.Type == MovementType.Count);
+    }
+
+    [Fact]
+    public async Task Product_forecast_returns_daily_average()
+    {
+        var client = await LoggedInClient();
+        var product = await GetByBarcode(client, PaletBarcode);
+
+        var f = await client.GetFromJsonAsync<ProductForecastDto>($"/api/products/{product.Id}/forecast", Json);
+
+        Assert.True(f!.AvgDailyOut > 0);
+        Assert.NotNull(f.DaysLeft);
+        Assert.True(f.SuggestedMinStock > 0);
+    }
+
+    [Fact]
     public async Task Stock_report_is_an_excel_file()
     {
         var client = await LoggedInClient();

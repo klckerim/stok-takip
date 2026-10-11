@@ -120,6 +120,18 @@ class ApiClient {
     return Dashboard.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
+  /// Yakında tükenecek ürünler ([days] gün içinde) ve son günlerin şüpheli hareketleri.
+  Future<Insights> getInsights({int days = 30}) async {
+    final res = await _send(() => http.get(_uri('/api/insights', {'days': '$days'}), headers: _headers));
+    return Insights.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  /// Ürünün günlük ortalama çıkışı, kaç gün yeteceği ve önerilen kritik seviye.
+  Future<ProductForecast> getProductForecast(int productId) async {
+    final res = await _send(() => http.get(_uri('/api/products/$productId/forecast'), headers: _headers));
+    return ProductForecast.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
   /// Tüm depo hareketleri. [type] null = hepsi; [days] 1 = bugün.
   Future<List<MovementListItem>> getAllMovements({MovementType? type, int days = 7, int take = 100}) async {
     final query = <String, String>{
