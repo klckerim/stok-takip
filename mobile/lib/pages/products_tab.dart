@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
@@ -12,6 +14,7 @@ class ProductsTab extends StatefulWidget {
     required this.refresh,
     required this.criticalOnly,
     required this.onOpenProduct,
+    this.loader,
   });
 
   /// Değeri değişince liste yeniden yüklenir (ör. hareket kaydedildikten sonra).
@@ -22,6 +25,9 @@ class ProductsTab extends StatefulWidget {
 
   final Future<void> Function(Product product) onOpenProduct;
 
+  /// Ürünleri getiren fonksiyon; testlerde sahte veri için. Varsayılan: API.
+  final Future<List<Product>> Function(String search, bool criticalOnly, int? categoryId)? loader;
+
   @override
   State<ProductsTab> createState() => _ProductsTabState();
 }
@@ -30,6 +36,12 @@ class _ProductsTabState extends State<ProductsTab> {
   final _api = ApiClient.instance;
   final _offline = OfflineStore.instance;
   final _search = TextEditingController();
+
+  /// Yazarken arama: son tuştan 300 ms sonra istek atılır.
+  Timer? _debounce;
+
+  /// Her yüklemede artar; geç gelen eski yanıt yeni sonucun üstüne yazılmasın diye.
+  int _requestSeq = 0;
   List<Product> _products = [];
   List<Category> _categories = [];
   int? _categoryId; // null = tüm kategoriler
@@ -48,6 +60,7 @@ class _ProductsTabState extends State<ProductsTab> {
   void dispose() {
     widget.refresh.removeListener(_load);
     widget.criticalOnly.removeListener(_load);
+    _debounce?.cancel();
     _search.dispose();
     super.dispose();
   }
@@ -61,15 +74,17 @@ class _ProductsTabState extends State<ProductsTab> {
       _error = null;
     });
     final search = _search.text.trim();
+    final seq = ++_requestSeq;
     try {
-      final items = await _api.getProducts(search: search, criticalOnly: _criticalOnly, categoryId: _categoryId);
-      if (!mounted) return;
+      final items = await (widget.loader?.call(search, _criticalOnly, _categoryId) ??
+          _api.getProducts(search: search, criticalOnly: _criticalOnly, categoryId: _categoryId));
+      if (!mounted || seq != _requestSeq) return;
       setState(() => _products = items);
       _offline.setOffline(false);
       if (search.isEmpty && !_criticalOnly && _categoryId == null) await _offline.cacheProducts(items);
       _loadCategories();
     } on ApiException catch (e) {
-      if (!mounted) return;
+      if (!mounted || seq != _requestSeq) return;
       if (e.isUnauthorized) return handleUnauthorized(context);
       if (e.isNetworkError) {
         _offline.setOffline(true);
@@ -78,8 +93,14 @@ class _ProductsTabState extends State<ProductsTab> {
       }
       setState(() => _error = e.message);
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && seq == _requestSeq) setState(() => _loading = false);
     }
+  }
+
+  void _onSearchChanged(String _) {
+    setState(() {}); // temizle düğmesi görünürlüğü
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), _load);
   }
 
   Future<void> _loadCategories() async {
@@ -118,16 +139,22 @@ class _ProductsTabState extends State<ProductsTab> {
             leading: const Icon(Icons.search),
             elevation: const WidgetStatePropertyAll(0),
             trailing: [
-              IconButton(
-                tooltip: 'Aramayı temizle',
-                icon: const Icon(Icons.clear),
-                onPressed: () {
-                  _search.clear();
-                  _load();
-                },
-              ),
+              if (_search.text.isNotEmpty)
+                IconButton(
+                  tooltip: 'Aramayı temizle',
+                  icon: const Icon(Icons.clear),
+                  onPressed: () {
+                    _debounce?.cancel();
+                    _search.clear();
+                    _load();
+                  },
+                ),
             ],
-            onSubmitted: (_) => _load(),
+            onChanged: _onSearchChanged,
+            onSubmitted: (_) {
+              _debounce?.cancel();
+              _load();
+            },
           ),
         ),
         SingleChildScrollView(
